@@ -482,3 +482,203 @@ func TestClientSingleConnect(t *testing.T) {
 		}
 	})
 }
+
+func TestClientAuthenFollowRestart(t *testing.T) {
+	t.Run("authentication follow returns typed error", func(t *testing.T) {
+		secret := []byte("testsecret")
+		followServer := "alt-server.example.com:49"
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			reply := &AuthenReply{
+				Status:    AuthenStatusFollow,
+				ServerMsg: []byte(followServer),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenFollow)
+		assert.Contains(t, err.Error(), followServer)
+		assert.NotNil(t, reply)
+		assert.Equal(t, uint8(AuthenStatusFollow), reply.Status)
+	})
+
+	t.Run("authentication restart returns typed error", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			reply := &AuthenReply{
+				Status:    AuthenStatusRestart,
+				ServerMsg: []byte("Please restart authentication"),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenRestart)
+		assert.NotNil(t, reply)
+		assert.Equal(t, uint8(AuthenStatusRestart), reply.Status)
+	})
+
+	t.Run("ASCII authentication follow returns typed error", func(t *testing.T) {
+		secret := []byte("testsecret")
+		followServer := "backup-server.example.com:49"
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			reply := &AuthenReply{
+				Status:    AuthenStatusFollow,
+				ServerMsg: []byte(followServer),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "password", nil
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenFollow)
+		assert.Contains(t, err.Error(), followServer)
+		assert.NotNil(t, reply)
+	})
+
+	t.Run("ASCII authentication restart returns typed error", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			reply := &AuthenReply{
+				Status:    AuthenStatusRestart,
+				ServerMsg: []byte("Restart required"),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "password", nil
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenRestart)
+		assert.NotNil(t, reply)
+	})
+}

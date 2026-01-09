@@ -407,3 +407,216 @@ func TestIsClientPacket(t *testing.T) {
 		assert.False(t, IsServerPacket(nil))
 	})
 }
+
+func BenchmarkParseAuthenPacket(b *testing.B) {
+	scenarios := []struct {
+		name  string
+		seqNo uint8
+		data  []byte
+	}{
+		{
+			name:  "start",
+			seqNo: 1,
+			data: func() []byte {
+				p := &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+				d, _ := p.MarshalBinary()
+				return d
+			}(),
+		},
+		{
+			name:  "reply",
+			seqNo: 2,
+			data: func() []byte {
+				p := &AuthenReply{Status: AuthenStatusPass}
+				d, _ := p.MarshalBinary()
+				return d
+			}(),
+		},
+		{
+			name:  "continue",
+			seqNo: 3,
+			data: func() []byte {
+				p := &AuthenContinue{UserMsg: []byte("password")}
+				d, _ := p.MarshalBinary()
+				return d
+			}(),
+		},
+	}
+
+	for _, sc := range scenarios {
+		b.Run(sc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = ParseAuthenPacket(sc.seqNo, sc.data)
+			}
+		})
+	}
+}
+
+func BenchmarkParseAuthorPacket(b *testing.B) {
+	b.Run("request", func(b *testing.B) {
+		p := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+		data, _ := p.MarshalBinary()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseAuthorPacket(1, data)
+		}
+	})
+
+	b.Run("response", func(b *testing.B) {
+		p := &AuthorResponse{Status: AuthorStatusPassAdd}
+		data, _ := p.MarshalBinary()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseAuthorPacket(2, data)
+		}
+	})
+}
+
+func BenchmarkParseAcctPacket(b *testing.B) {
+	b.Run("request", func(b *testing.B) {
+		p := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+		data, _ := p.MarshalBinary()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseAcctPacket(1, data)
+		}
+	})
+
+	b.Run("reply", func(b *testing.B) {
+		p := &AcctReply{Status: AcctStatusSuccess}
+		data, _ := p.MarshalBinary()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = ParseAcctPacket(2, data)
+		}
+	})
+}
+
+func BenchmarkFullPacketFlow(b *testing.B) {
+	header := &Header{
+		Version:   0xc0,
+		Type:      PacketTypeAuthen,
+		SeqNo:     1,
+		SessionID: 0x12345678,
+	}
+	secret := []byte("sharedsecret123")
+	pkt := &AuthenStart{
+		Action:     AuthenActionLogin,
+		PrivLevel:  15,
+		AuthenType: AuthenTypePAP,
+		Service:    AuthenServiceLogin,
+		User:       []byte("administrator"),
+		Port:       []byte("console"),
+		RemoteAddr: []byte("192.168.1.100"),
+		Data:       []byte("secretpassword"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		data, _ := pkt.MarshalBinary()
+		obfuscated := Obfuscate(header, secret, data)
+		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		result := &AuthenStart{}
+		_ = result.UnmarshalBinary(deobfuscated)
+	}
+}
+
+func FuzzParseAuthenPacket(f *testing.F) {
+	start := &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := start.MarshalBinary(); data != nil {
+		f.Add(uint8(1), data)
+	}
+
+	reply := &AuthenReply{Status: AuthenStatusPass}
+	if data, _ := reply.MarshalBinary(); data != nil {
+		f.Add(uint8(2), data)
+	}
+
+	cont := &AuthenContinue{UserMsg: []byte("password")}
+	if data, _ := cont.MarshalBinary(); data != nil {
+		f.Add(uint8(3), data)
+	}
+
+	f.Fuzz(func(t *testing.T, seqNo uint8, data []byte) {
+		p, err := ParseAuthenPacket(seqNo, data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful parse: %v", err)
+		}
+
+		if marshaled == nil {
+			t.Fatal("marshal returned nil")
+		}
+	})
+}
+
+func FuzzParseAuthorPacket(f *testing.F) {
+	req := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := req.MarshalBinary(); data != nil {
+		f.Add(uint8(1), data)
+	}
+
+	resp := &AuthorResponse{Status: AuthorStatusPassAdd}
+	if data, _ := resp.MarshalBinary(); data != nil {
+		f.Add(uint8(2), data)
+	}
+
+	f.Fuzz(func(t *testing.T, seqNo uint8, data []byte) {
+		p, err := ParseAuthorPacket(seqNo, data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful parse: %v", err)
+		}
+
+		if marshaled == nil {
+			t.Fatal("marshal returned nil")
+		}
+	})
+}
+
+func FuzzParseAcctPacket(f *testing.F) {
+	req := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := req.MarshalBinary(); data != nil {
+		f.Add(uint8(1), data)
+	}
+
+	reply := &AcctReply{Status: AcctStatusSuccess}
+	if data, _ := reply.MarshalBinary(); data != nil {
+		f.Add(uint8(2), data)
+	}
+
+	f.Fuzz(func(t *testing.T, seqNo uint8, data []byte) {
+		p, err := ParseAcctPacket(seqNo, data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful parse: %v", err)
+		}
+
+		if marshaled == nil {
+			t.Fatal("marshal returned nil")
+		}
+	})
+}

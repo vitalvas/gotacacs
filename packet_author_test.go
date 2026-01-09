@@ -536,3 +536,184 @@ func TestAuthorResponseEmptyArgs(t *testing.T) {
 		assert.Equal(t, []byte("test"), decoded.Args[1])
 	})
 }
+
+func BenchmarkAuthorRequestMarshalBinary(b *testing.B) {
+	scenarios := []struct {
+		name string
+		pkt  *AuthorRequest
+	}{
+		{
+			name: "minimal",
+			pkt: &AuthorRequest{
+				AuthenMethod: AuthenTypePAP,
+				PrivLevel:    1,
+				AuthenType:   AuthenTypePAP,
+				Service:      AuthenServiceLogin,
+				User:         []byte("user"),
+			},
+		},
+		{
+			name: "with_args",
+			pkt: func() *AuthorRequest {
+				p := &AuthorRequest{
+					AuthenMethod: AuthenTypePAP,
+					PrivLevel:    15,
+					AuthenType:   AuthenTypePAP,
+					Service:      AuthenServiceLogin,
+					User:         []byte("admin"),
+					Port:         []byte("console"),
+					RemoteAddr:   []byte("10.0.0.1"),
+				}
+				p.AddArg("service=shell")
+				p.AddArg("cmd=show")
+				p.AddArg("cmd-arg=running-config")
+				return p
+			}(),
+		},
+	}
+
+	for _, sc := range scenarios {
+		b.Run(sc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = sc.pkt.MarshalBinary()
+			}
+		})
+	}
+}
+
+func BenchmarkAuthorRequestUnmarshalBinary(b *testing.B) {
+	pkt := &AuthorRequest{
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    15,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("admin"),
+		Port:         []byte("console"),
+		RemoteAddr:   []byte("10.0.0.1"),
+	}
+	pkt.AddArg("service=shell")
+	pkt.AddArg("cmd=show")
+	pkt.AddArg("cmd-arg=running-config")
+	data, _ := pkt.MarshalBinary()
+	target := &AuthorRequest{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func BenchmarkAuthorResponseMarshalBinary(b *testing.B) {
+	pkt := &AuthorResponse{
+		Status:    AuthorStatusPassAdd,
+		ServerMsg: []byte("Authorization successful"),
+		Data:      []byte("extra-info"),
+	}
+	pkt.AddArg("priv-lvl=15")
+	pkt.AddArg("timeout=3600")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = pkt.MarshalBinary()
+	}
+}
+
+func BenchmarkAuthorResponseUnmarshalBinary(b *testing.B) {
+	pkt := &AuthorResponse{
+		Status:    AuthorStatusPassAdd,
+		ServerMsg: []byte("Authorization successful"),
+		Data:      []byte("extra-info"),
+	}
+	pkt.AddArg("priv-lvl=15")
+	pkt.AddArg("timeout=3600")
+	data, _ := pkt.MarshalBinary()
+	target := &AuthorResponse{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func FuzzAuthorRequestUnmarshalBinary(f *testing.F) {
+	validPkt := &AuthorRequest{
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    15,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("admin"),
+		Port:         []byte("console"),
+		RemoteAddr:   []byte("10.0.0.1"),
+	}
+	validPkt.AddArg("service=shell")
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AuthorRequest{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AuthorRequest{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}
+
+func FuzzAuthorResponseUnmarshalBinary(f *testing.F) {
+	validPkt := &AuthorResponse{
+		Status:    AuthorStatusPassAdd,
+		ServerMsg: []byte("Authorized"),
+		Data:      []byte("info"),
+	}
+	validPkt.AddArg("priv-lvl=15")
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AuthorResponse{Status: AuthorStatusFail}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AuthorResponse{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AuthorResponse{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}

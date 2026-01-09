@@ -17,23 +17,44 @@ func TestSecretProvider(t *testing.T) {
 		provider := StaticSecretProvider(secret)
 
 		addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
-		result := provider.GetSecret(addr)
+		result, userData := provider.GetSecret(addr)
 		assert.Equal(t, secret, result)
+		assert.Nil(t, userData)
 	})
 
 	t.Run("secret provider func", func(t *testing.T) {
-		provider := SecretProviderFunc(func(addr net.Addr) []byte {
+		provider := SecretProviderFunc(func(addr net.Addr) ([]byte, map[string]string) {
 			if addr.String() == "127.0.0.1:12345" {
-				return []byte("secret1")
+				return []byte("secret1"), map[string]string{"client": "client1"}
 			}
-			return []byte("default")
+			return []byte("default"), nil
 		})
 
 		addr1, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
 		addr2, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:54321")
 
-		assert.Equal(t, []byte("secret1"), provider.GetSecret(addr1))
-		assert.Equal(t, []byte("default"), provider.GetSecret(addr2))
+		secret1, userData1 := provider.GetSecret(addr1)
+		assert.Equal(t, []byte("secret1"), secret1)
+		assert.Equal(t, map[string]string{"client": "client1"}, userData1)
+
+		secret2, userData2 := provider.GetSecret(addr2)
+		assert.Equal(t, []byte("default"), secret2)
+		assert.Nil(t, userData2)
+	})
+
+	t.Run("secret provider with user data", func(t *testing.T) {
+		provider := SecretProviderFunc(func(_ net.Addr) ([]byte, map[string]string) {
+			return []byte("secret"), map[string]string{
+				"client_name": "router1",
+				"client_type": "network",
+			}
+		})
+
+		addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
+		secret, userData := provider.GetSecret(addr)
+		assert.Equal(t, []byte("secret"), secret)
+		assert.Equal(t, "router1", userData["client_name"])
+		assert.Equal(t, "network", userData["client_type"])
 	})
 }
 
@@ -625,5 +646,242 @@ func TestServerHandlerNilReply(t *testing.T) {
 		reply, err := client.AccountingStart(context.Background(), "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+	})
+}
+
+func TestServerSessionState(t *testing.T) {
+	runSessionStateTest := func(t *testing.T, setupServer func(ln Listener, store SessionStore, captureID *uint32) *Server, runClient func(client *Client) error) {
+		t.Helper()
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		sessionStore := NewMemorySessionStore()
+		var capturedSessionID uint32
+
+		server := setupServer(ln, sessionStore, &capturedSessionID)
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		require.NoError(t, runClient(client))
+
+		time.Sleep(10 * time.Millisecond)
+		_, exists := sessionStore.Get(capturedSessionID)
+		assert.False(t, exists, "session should be cleaned up")
+	}
+
+	t.Run("authentication pass", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+						*captureID = req.SessionID
+						return &AuthenReply{Status: AuthenStatusPass}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+				if err == nil {
+					assert.True(t, reply.IsPass())
+				}
+				return err
+			})
+	})
+
+	t.Run("authentication fail", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+						*captureID = req.SessionID
+						return &AuthenReply{Status: AuthenStatusFail}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+				if err == nil {
+					assert.True(t, reply.IsFail())
+				}
+				return err
+			})
+	})
+
+	t.Run("authorization pass", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, req *AuthorRequestContext) *AuthorResponse {
+						*captureID = req.SessionID
+						return &AuthorResponse{Status: AuthorStatusPassAdd}
+					})))
+			},
+			func(client *Client) error {
+				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+				if err == nil {
+					assert.True(t, resp.IsPass())
+				}
+				return err
+			})
+	})
+
+	t.Run("authorization fail", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, req *AuthorRequestContext) *AuthorResponse {
+						*captureID = req.SessionID
+						return &AuthorResponse{Status: AuthorStatusFail}
+					})))
+			},
+			func(client *Client) error {
+				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+				if err == nil {
+					assert.True(t, resp.IsFail())
+				}
+				return err
+			})
+	})
+
+	t.Run("accounting success", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
+						*captureID = req.SessionID
+						return &AcctReply{Status: AcctStatusSuccess}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				if err == nil {
+					assert.True(t, reply.IsSuccess())
+				}
+				return err
+			})
+	})
+
+	t.Run("accounting error", func(t *testing.T) {
+		runSessionStateTest(t,
+			func(ln Listener, store SessionStore, captureID *uint32) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
+					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
+						*captureID = req.SessionID
+						return &AcctReply{Status: AcctStatusError}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				if err == nil {
+					assert.True(t, reply.IsError())
+				}
+				return err
+			})
+	})
+}
+
+func TestServerUserDataPassing(t *testing.T) {
+	runUserDataTest := func(t *testing.T, expectedUserData map[string]string, setupServer func(ln Listener, provider SecretProvider) *Server, runClient func(client *Client) error, getReceived func() map[string]string) {
+		t.Helper()
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		secretProvider := SecretProviderFunc(func(_ net.Addr) ([]byte, map[string]string) {
+			return []byte("testsecret"), expectedUserData
+		})
+
+		server := setupServer(ln, secretProvider)
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		require.NoError(t, runClient(client))
+		assert.Equal(t, expectedUserData, getReceived())
+	}
+
+	t.Run("user data passed to authentication handler", func(t *testing.T) {
+		var receivedUserData map[string]string
+		expectedUserData := map[string]string{"client_name": "router1", "client_type": "network"}
+		runUserDataTest(t, expectedUserData,
+			func(ln Listener, provider SecretProvider) *Server {
+				return NewServer(WithServerListener(ln), WithSecretProvider(provider),
+					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+						receivedUserData = req.UserData
+						return &AuthenReply{Status: AuthenStatusPass}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+				if err == nil {
+					assert.True(t, reply.IsPass())
+				}
+				return err
+			},
+			func() map[string]string { return receivedUserData })
+	})
+
+	t.Run("user data passed to authorization handler", func(t *testing.T) {
+		var receivedUserData map[string]string
+		expectedUserData := map[string]string{"client_name": "switch1"}
+		runUserDataTest(t, expectedUserData,
+			func(ln Listener, provider SecretProvider) *Server {
+				return NewServer(WithServerListener(ln), WithSecretProvider(provider),
+					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, req *AuthorRequestContext) *AuthorResponse {
+						receivedUserData = req.UserData
+						return &AuthorResponse{Status: AuthorStatusPassAdd}
+					})))
+			},
+			func(client *Client) error {
+				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+				if err == nil {
+					assert.True(t, resp.IsPass())
+				}
+				return err
+			},
+			func() map[string]string { return receivedUserData })
+	})
+
+	t.Run("user data passed to accounting handler", func(t *testing.T) {
+		var receivedUserData map[string]string
+		expectedUserData := map[string]string{"site": "datacenter1"}
+		runUserDataTest(t, expectedUserData,
+			func(ln Listener, provider SecretProvider) *Server {
+				return NewServer(WithServerListener(ln), WithSecretProvider(provider),
+					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
+						receivedUserData = req.UserData
+						return &AcctReply{Status: AcctStatusSuccess}
+					})))
+			},
+			func(client *Client) error {
+				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				if err == nil {
+					assert.True(t, reply.IsSuccess())
+				}
+				return err
+			},
+			func() map[string]string { return receivedUserData })
+	})
+
+	t.Run("nil user data handled correctly", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		var receivedUserData map[string]string
+		server := NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+			WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+				receivedUserData = req.UserData
+				return &AuthenReply{Status: AuthenStatusPass}
+			})))
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+		assert.Nil(t, receivedUserData)
 	})
 }

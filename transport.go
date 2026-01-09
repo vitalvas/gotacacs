@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"time"
 )
@@ -158,4 +159,21 @@ func NewTLSClientConfig(serverName string, insecureSkipVerify bool) *tls.Config 
 		InsecureSkipVerify: insecureSkipVerify,
 		MinVersion:         tls.VersionTLS12,
 	}
+}
+
+// writeAll writes all bytes to the connection, handling partial writes.
+// It loops until all bytes are written or an error occurs.
+// Returns io.ErrShortWrite if Write returns 0 with no error.
+func writeAll(conn net.Conn, data []byte) error {
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
 }

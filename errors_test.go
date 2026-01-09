@@ -24,6 +24,9 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrAccountingFailed,
 			ErrBufferTooShort,
 			ErrBodyTooLarge,
+			ErrAuthenFollow,
+			ErrAuthenRestart,
+			ErrSequenceOverflow,
 		}
 
 		for _, err := range errs {
@@ -47,6 +50,9 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrAccountingFailed,
 			ErrBufferTooShort,
 			ErrBodyTooLarge,
+			ErrAuthenFollow,
+			ErrAuthenRestart,
+			ErrSequenceOverflow,
 		}
 
 		for i, err1 := range errs {
@@ -102,6 +108,9 @@ func TestErrorMessages(t *testing.T) {
 		{ErrAccountingFailed, "accounting failed"},
 		{ErrBufferTooShort, "buffer too short"},
 		{ErrBodyTooLarge, "body too large"},
+		{ErrAuthenFollow, "authentication follow requested"},
+		{ErrAuthenRestart, "authentication restart requested"},
+		{ErrSequenceOverflow, "sequence number overflow"},
 	}
 
 	for _, tt := range tests {

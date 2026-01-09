@@ -165,18 +165,24 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 	if userLen > 0 {
 		p.User = make([]byte, userLen)
 		copy(p.User, data[offset:offset+userLen])
+	} else {
+		p.User = nil
 	}
 	offset += userLen
 
 	if portLen > 0 {
 		p.Port = make([]byte, portLen)
 		copy(p.Port, data[offset:offset+portLen])
+	} else {
+		p.Port = nil
 	}
 	offset += portLen
 
 	if remAddrLen > 0 {
 		p.RemoteAddr = make([]byte, remAddrLen)
 		copy(p.RemoteAddr, data[offset:offset+remAddrLen])
+	} else {
+		p.RemoteAddr = nil
 	}
 	offset += remAddrLen
 
@@ -190,6 +196,8 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 			}
 			offset += argLen
 		}
+	} else {
+		p.Args = nil
 	}
 
 	return nil
@@ -256,12 +264,16 @@ func (p *AcctReply) UnmarshalBinary(data []byte) error {
 	if serverMsgLen > 0 {
 		p.ServerMsg = make([]byte, serverMsgLen)
 		copy(p.ServerMsg, data[offset:offset+serverMsgLen])
+	} else {
+		p.ServerMsg = nil
 	}
 	offset += serverMsgLen
 
 	if dataLen > 0 {
 		p.Data = make([]byte, dataLen)
 		copy(p.Data, data[offset:offset+dataLen])
+	} else {
+		p.Data = nil
 	}
 
 	return nil

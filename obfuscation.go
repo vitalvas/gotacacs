@@ -46,28 +46,28 @@ func generatePseudoPad(header *Header, secret []byte, length int) []byte {
 		return nil
 	}
 
-	// Prepare the base data: session_id (4 bytes) + secret + version (1 byte) + seq_no (1 byte)
-	sessionIDBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(sessionIDBytes, header.SessionID)
+	// Calculate number of MD5 blocks needed
+	numBlocks := (length + md5.Size - 1) / md5.Size
+	pad := make([]byte, numBlocks*md5.Size)
 
-	baseData := make([]byte, 0, 4+len(secret)+2)
-	baseData = append(baseData, sessionIDBytes...)
-	baseData = append(baseData, secret...)
-	baseData = append(baseData, header.Version)
-	baseData = append(baseData, header.SeqNo)
+	// Prepare input buffer: session_id (4) + secret + version (1) + seq_no (1) + prevHash (16)
+	baseLen := 4 + len(secret) + 2
+	input := make([]byte, baseLen+md5.Size)
+	binary.BigEndian.PutUint32(input[0:4], header.SessionID)
+	copy(input[4:], secret)
+	input[4+len(secret)] = header.Version
+	input[4+len(secret)+1] = header.SeqNo
 
-	// Generate enough pseudo-pad bytes
-	pad := make([]byte, 0, ((length/md5.Size)+1)*md5.Size)
-	var prevHash []byte
-
-	for len(pad) < length {
-		h := md5.New()
-		h.Write(baseData)
-		if prevHash != nil {
-			h.Write(prevHash)
+	// Generate pseudo-pad blocks using md5.Sum (returns [16]byte, no allocation)
+	for i := 0; i < numBlocks; i++ {
+		var hash [md5.Size]byte
+		if i == 0 {
+			hash = md5.Sum(input[:baseLen])
+		} else {
+			hash = md5.Sum(input[:baseLen+md5.Size])
 		}
-		prevHash = h.Sum(nil)
-		pad = append(pad, prevHash...)
+		copy(pad[i*md5.Size:], hash[:])
+		copy(input[baseLen:], hash[:])
 	}
 
 	return pad[:length]

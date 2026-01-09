@@ -123,7 +123,7 @@ func TestMiscConstants(t *testing.T) {
 		assert.Equal(t, 49, DefaultPort)
 	})
 
-	t.Run("max body length", func(t *testing.T) {
-		assert.Equal(t, uint32(0xFFFFFFFF), uint32(MaxBodyLength))
+	t.Run("default max body length", func(t *testing.T) {
+		assert.Equal(t, uint32(256*1024), uint32(DefaultMaxBodyLength))
 	})
 }

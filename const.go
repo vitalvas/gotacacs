@@ -177,5 +177,6 @@ const HeaderLength = 12
 // DefaultPort is the default TACACS+ port as defined in RFC8907.
 const DefaultPort = 49
 
-// MaxBodyLength is the maximum body length (2^32 - 1 bytes).
-const MaxBodyLength = 0xFFFFFFFF
+// DefaultMaxBodyLength is the default maximum allowed body length (256KB).
+// This prevents memory exhaustion attacks from malicious peers.
+const DefaultMaxBodyLength = 256 * 1024

@@ -90,24 +90,32 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 	if userLen > 0 {
 		p.User = make([]byte, userLen)
 		copy(p.User, data[offset:offset+userLen])
+	} else {
+		p.User = nil
 	}
 	offset += userLen
 
 	if portLen > 0 {
 		p.Port = make([]byte, portLen)
 		copy(p.Port, data[offset:offset+portLen])
+	} else {
+		p.Port = nil
 	}
 	offset += portLen
 
 	if remAddrLen > 0 {
 		p.RemoteAddr = make([]byte, remAddrLen)
 		copy(p.RemoteAddr, data[offset:offset+remAddrLen])
+	} else {
+		p.RemoteAddr = nil
 	}
 	offset += remAddrLen
 
 	if dataLen > 0 {
 		p.Data = make([]byte, dataLen)
 		copy(p.Data, data[offset:offset+dataLen])
+	} else {
+		p.Data = nil
 	}
 
 	return nil
@@ -175,12 +183,16 @@ func (p *AuthenReply) UnmarshalBinary(data []byte) error {
 	if serverMsgLen > 0 {
 		p.ServerMsg = make([]byte, serverMsgLen)
 		copy(p.ServerMsg, data[offset:offset+serverMsgLen])
+	} else {
+		p.ServerMsg = nil
 	}
 	offset += serverMsgLen
 
 	if dataLen > 0 {
 		p.Data = make([]byte, dataLen)
 		copy(p.Data, data[offset:offset+dataLen])
+	} else {
+		p.Data = nil
 	}
 
 	return nil
@@ -272,12 +284,16 @@ func (p *AuthenContinue) UnmarshalBinary(data []byte) error {
 	if userMsgLen > 0 {
 		p.UserMsg = make([]byte, userMsgLen)
 		copy(p.UserMsg, data[offset:offset+userMsgLen])
+	} else {
+		p.UserMsg = nil
 	}
 	offset += userMsgLen
 
 	if dataLen > 0 {
 		p.Data = make([]byte, dataLen)
 		copy(p.Data, data[offset:offset+dataLen])
+	} else {
+		p.Data = nil
 	}
 
 	return nil

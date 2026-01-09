@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -341,6 +342,66 @@ func createTempCertFiles(t *testing.T) (certFile, keyFile string) {
 	require.NoError(t, os.WriteFile(keyFile, keyPEM, 0o600))
 
 	return certFile, keyFile
+}
+
+func TestWriteAll(t *testing.T) {
+	t.Run("write all bytes successfully", func(t *testing.T) {
+		// Create a pipe for testing
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+
+		data := []byte("hello world test data")
+		done := make(chan error)
+
+		go func() {
+			done <- writeAll(client, data)
+		}()
+
+		// Read all data on server side
+		buf := make([]byte, len(data))
+		_, err := server.Read(buf)
+		require.NoError(t, err)
+		assert.Equal(t, data, buf)
+
+		err = <-done
+		assert.NoError(t, err)
+	})
+
+	t.Run("write empty data", func(t *testing.T) {
+		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+
+		err := writeAll(client, []byte{})
+		assert.NoError(t, err)
+	})
+
+	t.Run("write to closed connection", func(t *testing.T) {
+		server, client := net.Pipe()
+		server.Close()
+
+		err := writeAll(client, []byte("test"))
+		assert.Error(t, err)
+		client.Close()
+	})
+
+	t.Run("zero-progress write returns error", func(t *testing.T) {
+		// Create a mock connection that returns 0 bytes written with no error
+		mockConn := &zeroWriteConn{}
+
+		err := writeAll(mockConn, []byte("test"))
+		assert.ErrorIs(t, err, io.ErrShortWrite)
+	})
+}
+
+// zeroWriteConn is a mock connection that returns 0 bytes written with no error.
+type zeroWriteConn struct {
+	net.Conn
+}
+
+func (c *zeroWriteConn) Write([]byte) (int, error) {
+	return 0, nil
 }
 
 // generateTestCertificate generates a self-signed certificate for testing.

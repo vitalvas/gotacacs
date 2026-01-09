@@ -537,3 +537,264 @@ func TestAuthenContinueAbortMethods(t *testing.T) {
 		assert.Equal(t, uint8(0), p.Flags)
 	})
 }
+
+func BenchmarkAuthenStartMarshalBinary(b *testing.B) {
+	scenarios := []struct {
+		name string
+		pkt  *AuthenStart
+	}{
+		{
+			name: "minimal",
+			pkt:  &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin},
+		},
+		{
+			name: "with_user",
+			pkt: &AuthenStart{
+				Action:     AuthenActionLogin,
+				AuthenType: AuthenTypePAP,
+				Service:    AuthenServiceLogin,
+				User:       []byte("testuser"),
+			},
+		},
+		{
+			name: "full",
+			pkt: &AuthenStart{
+				Action:     AuthenActionLogin,
+				PrivLevel:  15,
+				AuthenType: AuthenTypePAP,
+				Service:    AuthenServiceLogin,
+				User:       []byte("testuser"),
+				Port:       []byte("tty0"),
+				RemoteAddr: []byte("192.168.1.100"),
+				Data:       []byte("password123"),
+			},
+		},
+	}
+
+	for _, sc := range scenarios {
+		b.Run(sc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = sc.pkt.MarshalBinary()
+			}
+		})
+	}
+}
+
+func BenchmarkAuthenStartUnmarshalBinary(b *testing.B) {
+	pkt := &AuthenStart{
+		Action:     AuthenActionLogin,
+		PrivLevel:  15,
+		AuthenType: AuthenTypePAP,
+		Service:    AuthenServiceLogin,
+		User:       []byte("testuser"),
+		Port:       []byte("tty0"),
+		RemoteAddr: []byte("192.168.1.100"),
+		Data:       []byte("password123"),
+	}
+	data, _ := pkt.MarshalBinary()
+	target := &AuthenStart{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func BenchmarkAuthenReplyMarshalBinary(b *testing.B) {
+	scenarios := []struct {
+		name string
+		pkt  *AuthenReply
+	}{
+		{
+			name: "pass",
+			pkt:  &AuthenReply{Status: AuthenStatusPass},
+		},
+		{
+			name: "with_message",
+			pkt: &AuthenReply{
+				Status:    AuthenStatusGetPass,
+				Flags:     AuthenReplyFlagNoEcho,
+				ServerMsg: []byte("Enter password:"),
+			},
+		},
+		{
+			name: "full",
+			pkt: &AuthenReply{
+				Status:    AuthenStatusGetData,
+				Flags:     AuthenReplyFlagNoEcho,
+				ServerMsg: []byte("Please enter your one-time password"),
+				Data:      []byte("challenge-data-here"),
+			},
+		},
+	}
+
+	for _, sc := range scenarios {
+		b.Run(sc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = sc.pkt.MarshalBinary()
+			}
+		})
+	}
+}
+
+func BenchmarkAuthenReplyUnmarshalBinary(b *testing.B) {
+	pkt := &AuthenReply{
+		Status:    AuthenStatusGetData,
+		Flags:     AuthenReplyFlagNoEcho,
+		ServerMsg: []byte("Please enter your one-time password"),
+		Data:      []byte("challenge-data-here"),
+	}
+	data, _ := pkt.MarshalBinary()
+	target := &AuthenReply{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func BenchmarkAuthenContinueMarshalBinary(b *testing.B) {
+	pkt := &AuthenContinue{
+		UserMsg: []byte("mypassword123"),
+		Data:    []byte("additional-data"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = pkt.MarshalBinary()
+	}
+}
+
+func BenchmarkAuthenContinueUnmarshalBinary(b *testing.B) {
+	pkt := &AuthenContinue{
+		UserMsg: []byte("mypassword123"),
+		Data:    []byte("additional-data"),
+	}
+	data, _ := pkt.MarshalBinary()
+	target := &AuthenContinue{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func FuzzAuthenStartUnmarshalBinary(f *testing.F) {
+	validPkt := &AuthenStart{
+		Action:     AuthenActionLogin,
+		PrivLevel:  1,
+		AuthenType: AuthenTypePAP,
+		Service:    AuthenServiceLogin,
+		User:       []byte("testuser"),
+		Port:       []byte("tty0"),
+		RemoteAddr: []byte("192.168.1.1"),
+		Data:       []byte("password"),
+	}
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AuthenStart{Action: AuthenActionLogin}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00})
+	f.Add([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AuthenStart{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AuthenStart{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}
+
+func FuzzAuthenReplyUnmarshalBinary(f *testing.F) {
+	validPkt := &AuthenReply{
+		Status:    AuthenStatusPass,
+		Flags:     AuthenReplyFlagNoEcho,
+		ServerMsg: []byte("Welcome"),
+		Data:      []byte("data"),
+	}
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AuthenReply{Status: AuthenStatusFail}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AuthenReply{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AuthenReply{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}
+
+func FuzzAuthenContinueUnmarshalBinary(f *testing.F) {
+	validPkt := &AuthenContinue{
+		Flags:   0,
+		UserMsg: []byte("response"),
+		Data:    []byte("extra"),
+	}
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x00, 0x00, 0x00, 0x00, 0x00})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0x01})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AuthenContinue{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AuthenContinue{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}

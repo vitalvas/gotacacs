@@ -109,7 +109,8 @@ func (s *Session) SeqNo() uint8 {
 // NextSeqNo returns the next sequence number and increments the internal counter.
 // For clients: 1, 3, 5, ... (odd numbers)
 // For servers: 2, 4, 6, ... (even numbers)
-func (s *Session) NextSeqNo() uint8 {
+// Returns ErrSequenceOverflow if the sequence number would wrap around.
+func (s *Session) NextSeqNo() (uint8, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,6 +122,10 @@ func (s *Session) NextSeqNo() uint8 {
 			s.seqNo = 2
 		}
 	} else {
+		// Check for overflow before incrementing
+		if s.seqNo == 255 {
+			return 0, ErrSequenceOverflow
+		}
 		// Subsequent packets increment by 1 for each side
 		s.seqNo++
 	}
@@ -131,7 +136,7 @@ func (s *Session) NextSeqNo() uint8 {
 		s.state = SessionStateActive
 	}
 
-	return s.seqNo
+	return s.seqNo, nil
 }
 
 // ValidateSeqNo validates an incoming sequence number.

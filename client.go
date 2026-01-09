@@ -21,6 +21,7 @@ type Client struct {
 
 	timeout       time.Duration
 	singleConnect bool
+	maxBodyLength uint32
 }
 
 // ClientOption is a function that configures a Client.
@@ -58,9 +59,12 @@ func WithTLSConfig(config *tls.Config) ClientOption {
 }
 
 // WithDialer sets a custom dialer for connections.
+// If dialer is nil, the default TCP dialer is retained.
 func WithDialer(dialer Dialer) ClientOption {
 	return func(c *Client) {
-		c.dialer = dialer
+		if dialer != nil {
+			c.dialer = dialer
+		}
 	}
 }
 
@@ -72,21 +76,33 @@ func WithSingleConnect(enabled bool) ClientOption {
 	}
 }
 
+// WithMaxBodyLength sets the maximum allowed body length for incoming packets.
+// This prevents memory exhaustion attacks from malicious servers.
+func WithMaxBodyLength(maxLength uint32) ClientOption {
+	return func(c *Client) {
+		c.maxBodyLength = maxLength
+	}
+}
+
 // NewClient creates a new TACACS+ client.
 func NewClient(address string, opts ...ClientOption) *Client {
 	c := &Client{
-		address: address,
-		timeout: 30 * time.Second,
-		dialer:  DefaultTCPDialer(),
+		address:       address,
+		timeout:       30 * time.Second,
+		dialer:        DefaultTCPDialer(),
+		maxBodyLength: DefaultMaxBodyLength,
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	// Update dialer timeout if it's the default TCP dialer
-	if tcpDialer, ok := c.dialer.(*TCPDialer); ok {
-		tcpDialer.Timeout = c.timeout
+	// Update dialer timeout after all options are applied
+	switch d := c.dialer.(type) {
+	case *TCPDialer:
+		d.Timeout = c.timeout
+	case *TLSDialer:
+		d.Timeout = c.timeout
 	}
 
 	return c
@@ -96,7 +112,12 @@ func NewClient(address string, opts ...ClientOption) *Client {
 func (c *Client) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.connectLocked(ctx)
+}
 
+// connectLocked establishes a connection without acquiring the lock.
+// The caller must hold c.mu.
+func (c *Client) connectLocked(ctx context.Context) error {
 	if c.conn != nil {
 		return nil // Already connected
 	}
@@ -158,13 +179,13 @@ func (c *Client) sendPacket(header *Header, body []byte) error {
 		}
 	}
 
-	// Write header and body
-	if _, err := c.conn.Write(headerData); err != nil {
+	// Write header and body using writeAll to handle partial writes
+	if err := writeAll(c.conn, headerData); err != nil {
 		return fmt.Errorf("failed to write header: %w", err)
 	}
 
 	if len(obfuscatedBody) > 0 {
-		if _, err := c.conn.Write(obfuscatedBody); err != nil {
+		if err := writeAll(c.conn, obfuscatedBody); err != nil {
 			return fmt.Errorf("failed to write body: %w", err)
 		}
 	}
@@ -193,6 +214,16 @@ func (c *Client) recvPacket() (*Header, []byte, error) {
 	header := &Header{}
 	if err := header.UnmarshalBinary(headerBuf); err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal header: %w", err)
+	}
+
+	// Validate header version and type
+	if err := header.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("invalid header: %w", err)
+	}
+
+	// Validate body length to prevent memory exhaustion
+	if header.Length > c.maxBodyLength {
+		return nil, nil, fmt.Errorf("%w: body length %d exceeds maximum %d", ErrBodyTooLarge, header.Length, c.maxBodyLength)
 	}
 
 	// Read body
@@ -240,17 +271,16 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 
 // AuthenticateWithContext performs authentication with additional context.
 func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *AuthenticateContext) (*AuthenReply, error) {
+	if authCtx == nil {
+		return nil, fmt.Errorf("%w: authCtx cannot be nil", ErrInvalidPacket)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Ensure we're connected
-	if c.conn == nil {
-		c.mu.Unlock()
-		if err := c.Connect(ctx); err != nil {
-			c.mu.Lock()
-			return nil, err
-		}
-		c.mu.Lock()
+	if err := c.connectLocked(ctx); err != nil {
+		return nil, err
 	}
 
 	// Create new session
@@ -278,7 +308,11 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 
 	// Create header
 	header := NewHeader(PacketTypeAuthen, session.ID())
-	header.SeqNo = session.NextSeqNo()
+	seqNo, err := session.NextSeqNo()
+	if err != nil {
+		return nil, err
+	}
+	header.SeqNo = seqNo
 
 	// Send START packet
 	if err := c.sendPacket(header, startBody); err != nil {
@@ -295,23 +329,44 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 
 	// Validate response
 	if respHeader.Type != PacketTypeAuthen {
+		c.closeConnection()
 		return nil, fmt.Errorf("%w: expected AUTHEN, got %d", ErrInvalidType, respHeader.Type)
 	}
 	if respHeader.SessionID != session.ID() {
+		c.closeConnection()
 		return nil, fmt.Errorf("%w: session ID mismatch", ErrSessionNotFound)
 	}
+	if !session.ValidateSeqNo(respHeader.SeqNo) {
+		c.closeConnection()
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidSequence, session.SeqNo()+1, respHeader.SeqNo)
+	}
+	session.UpdateSeqNo(respHeader.SeqNo)
 
 	// Parse reply
 	reply := &AuthenReply{}
 	if err := reply.UnmarshalBinary(respBody); err != nil {
+		c.closeConnection()
 		return nil, fmt.Errorf("failed to unmarshal REPLY: %w", err)
 	}
 
 	// Update session state based on reply
-	if reply.IsPass() {
+	switch reply.Status {
+	case AuthenStatusPass:
 		session.SetState(SessionStateComplete)
-	} else if reply.IsFail() || reply.IsError() {
+	case AuthenStatusFail, AuthenStatusError:
 		session.SetState(SessionStateError)
+	case AuthenStatusFollow:
+		session.SetState(SessionStateComplete)
+		if !c.singleConnect {
+			c.closeConnection()
+		}
+		return reply, fmt.Errorf("%w: %s", ErrAuthenFollow, string(reply.ServerMsg))
+	case AuthenStatusRestart:
+		session.SetState(SessionStateComplete)
+		if !c.singleConnect {
+			c.closeConnection()
+		}
+		return reply, ErrAuthenRestart
 	}
 
 	// Close connection if not using single-connect
@@ -329,13 +384,8 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 	defer c.mu.Unlock()
 
 	// Ensure we're connected
-	if c.conn == nil {
-		c.mu.Unlock()
-		if err := c.Connect(ctx); err != nil {
-			c.mu.Lock()
-			return nil, err
-		}
-		c.mu.Lock()
+	if err := c.connectLocked(ctx); err != nil {
+		return nil, err
 	}
 
 	// Create new session
@@ -360,7 +410,11 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 	// Create header
 	header := NewHeader(PacketTypeAuthen, session.ID())
-	header.SeqNo = session.NextSeqNo()
+	seqNo, err := session.NextSeqNo()
+	if err != nil {
+		return nil, err
+	}
+	header.SeqNo = seqNo
 
 	// Send START packet
 	if err := c.sendPacket(header, startBody); err != nil {
@@ -379,12 +433,22 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 		// Validate response
 		if respHeader.Type != PacketTypeAuthen {
+			c.closeConnection()
 			return nil, fmt.Errorf("%w: expected AUTHEN, got %d", ErrInvalidType, respHeader.Type)
+		}
+		if respHeader.SessionID != session.ID() {
+			c.closeConnection()
+			return nil, fmt.Errorf("%w: session ID mismatch", ErrSessionNotFound)
+		}
+		if !session.ValidateSeqNo(respHeader.SeqNo) {
+			c.closeConnection()
+			return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidSequence, session.SeqNo()+1, respHeader.SeqNo)
 		}
 
 		// Parse reply
 		reply := &AuthenReply{}
 		if err := reply.UnmarshalBinary(respBody); err != nil {
+			c.closeConnection()
 			return nil, fmt.Errorf("failed to unmarshal REPLY: %w", err)
 		}
 
@@ -407,6 +471,23 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 			return reply, nil
 		}
 
+		// Handle FOLLOW/RESTART statuses
+		if reply.Status == AuthenStatusFollow {
+			session.SetState(SessionStateComplete)
+			if !c.singleConnect {
+				c.closeConnection()
+			}
+			return reply, fmt.Errorf("%w: %s", ErrAuthenFollow, string(reply.ServerMsg))
+		}
+
+		if reply.Status == AuthenStatusRestart {
+			session.SetState(SessionStateComplete)
+			if !c.singleConnect {
+				c.closeConnection()
+			}
+			return reply, ErrAuthenRestart
+		}
+
 		// Handle prompts
 		if reply.NeedsInput() {
 			prompt := string(reply.ServerMsg)
@@ -415,8 +496,11 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 				// Send abort
 				cont := &AuthenContinue{Flags: AuthenContinueFlagAbort}
 				contBody, _ := cont.MarshalBinary()
-				header.SeqNo = session.NextSeqNo()
-				c.sendPacket(header, contBody)
+				abortSeqNo, seqErr := session.NextSeqNo()
+				if seqErr == nil {
+					header.SeqNo = abortSeqNo
+					c.sendPacket(header, contBody)
+				}
 				c.closeConnection()
 				return nil, err
 			}
@@ -428,7 +512,12 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 				return nil, fmt.Errorf("failed to marshal CONTINUE: %w", err)
 			}
 
-			header.SeqNo = session.NextSeqNo()
+			contSeqNo, err := session.NextSeqNo()
+			if err != nil {
+				c.closeConnection()
+				return nil, err
+			}
+			header.SeqNo = contSeqNo
 			if err := c.sendPacket(header, contBody); err != nil {
 				c.closeConnection()
 				return nil, err
@@ -446,13 +535,8 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	defer c.mu.Unlock()
 
 	// Ensure we're connected
-	if c.conn == nil {
-		c.mu.Unlock()
-		if err := c.Connect(ctx); err != nil {
-			c.mu.Lock()
-			return nil, err
-		}
-		c.mu.Lock()
+	if err := c.connectLocked(ctx); err != nil {
+		return nil, err
 	}
 
 	// Create new session
@@ -481,7 +565,11 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 
 	// Create header
 	header := NewHeader(PacketTypeAuthor, session.ID())
-	header.SeqNo = session.NextSeqNo()
+	seqNo, err := session.NextSeqNo()
+	if err != nil {
+		return nil, err
+	}
+	header.SeqNo = seqNo
 
 	// Send REQUEST
 	if err := c.sendPacket(header, reqBody); err != nil {
@@ -498,12 +586,23 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 
 	// Validate response
 	if respHeader.Type != PacketTypeAuthor {
+		c.closeConnection()
 		return nil, fmt.Errorf("%w: expected AUTHOR, got %d", ErrInvalidType, respHeader.Type)
 	}
+	if respHeader.SessionID != session.ID() {
+		c.closeConnection()
+		return nil, fmt.Errorf("%w: session ID mismatch", ErrSessionNotFound)
+	}
+	if !session.ValidateSeqNo(respHeader.SeqNo) {
+		c.closeConnection()
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidSequence, session.SeqNo()+1, respHeader.SeqNo)
+	}
+	session.UpdateSeqNo(respHeader.SeqNo)
 
 	// Parse response
 	resp := &AuthorResponse{}
 	if err := resp.UnmarshalBinary(respBody); err != nil {
+		c.closeConnection()
 		return nil, fmt.Errorf("failed to unmarshal RESPONSE: %w", err)
 	}
 
@@ -528,13 +627,8 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	defer c.mu.Unlock()
 
 	// Ensure we're connected
-	if c.conn == nil {
-		c.mu.Unlock()
-		if err := c.Connect(ctx); err != nil {
-			c.mu.Lock()
-			return nil, err
-		}
-		c.mu.Lock()
+	if err := c.connectLocked(ctx); err != nil {
+		return nil, err
 	}
 
 	// Create new session
@@ -564,7 +658,11 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 
 	// Create header
 	header := NewHeader(PacketTypeAcct, session.ID())
-	header.SeqNo = session.NextSeqNo()
+	seqNo, err := session.NextSeqNo()
+	if err != nil {
+		return nil, err
+	}
+	header.SeqNo = seqNo
 
 	// Send REQUEST
 	if err := c.sendPacket(header, reqBody); err != nil {
@@ -581,12 +679,23 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 
 	// Validate response
 	if respHeader.Type != PacketTypeAcct {
+		c.closeConnection()
 		return nil, fmt.Errorf("%w: expected ACCT, got %d", ErrInvalidType, respHeader.Type)
 	}
+	if respHeader.SessionID != session.ID() {
+		c.closeConnection()
+		return nil, fmt.Errorf("%w: session ID mismatch", ErrSessionNotFound)
+	}
+	if !session.ValidateSeqNo(respHeader.SeqNo) {
+		c.closeConnection()
+		return nil, fmt.Errorf("%w: expected %d, got %d", ErrInvalidSequence, session.SeqNo()+1, respHeader.SeqNo)
+	}
+	session.UpdateSeqNo(respHeader.SeqNo)
 
 	// Parse reply
 	reply := &AcctReply{}
 	if err := reply.UnmarshalBinary(respBody); err != nil {
+		c.closeConnection()
 		return nil, fmt.Errorf("failed to unmarshal REPLY: %w", err)
 	}
 

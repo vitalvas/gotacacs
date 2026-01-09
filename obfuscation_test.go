@@ -398,3 +398,118 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		assert.Equal(t, body, deobfuscated)
 	})
 }
+
+func byteSizeName(size int) string {
+	switch {
+	case size >= 1024:
+		return string(rune('0'+size/1024)) + "KB"
+	default:
+		return string(rune('0'+size/100)) + string(rune('0'+(size%100)/10)) + string(rune('0'+size%10)) + "B"
+	}
+}
+
+func BenchmarkObfuscate(b *testing.B) {
+	sizes := []int{16, 64, 256, 1024, 4096}
+
+	for _, size := range sizes {
+		b.Run(byteSizeName(size), func(b *testing.B) {
+			header := &Header{
+				Version:   0xc0,
+				SeqNo:     1,
+				SessionID: 0x12345678,
+			}
+			secret := []byte("testsecret123456")
+			body := bytes.Repeat([]byte("x"), size)
+
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = Obfuscate(header, secret, body)
+			}
+		})
+	}
+}
+
+func BenchmarkDeobfuscate(b *testing.B) {
+	sizes := []int{16, 64, 256, 1024, 4096}
+
+	for _, size := range sizes {
+		b.Run(byteSizeName(size), func(b *testing.B) {
+			header := &Header{
+				Version:   0xc0,
+				SeqNo:     1,
+				SessionID: 0x12345678,
+			}
+			secret := []byte("testsecret123456")
+			body := bytes.Repeat([]byte("x"), size)
+			obfuscated := Obfuscate(header, secret, body)
+
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = Deobfuscate(header, secret, obfuscated)
+			}
+		})
+	}
+}
+
+func BenchmarkGeneratePseudoPad(b *testing.B) {
+	sizes := []int{md5.Size, md5.Size * 2, md5.Size * 4, md5.Size * 16}
+
+	for _, size := range sizes {
+		b.Run(byteSizeName(size), func(b *testing.B) {
+			header := &Header{
+				Version:   0xc0,
+				SeqNo:     1,
+				SessionID: 0x12345678,
+			}
+			secret := []byte("testsecret123456")
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = generatePseudoPad(header, secret, size)
+			}
+		})
+	}
+}
+
+func FuzzObfuscateDeobfuscate(f *testing.F) {
+	f.Add([]byte("secret"), []byte("hello world"), uint8(0xc0), uint8(1), uint32(0x12345678))
+	f.Add([]byte("s"), []byte("x"), uint8(0xc1), uint8(255), uint32(0xFFFFFFFF))
+	f.Add([]byte("longsecretkey12345"), []byte("longer body data here that spans multiple md5 blocks"), uint8(0xc0), uint8(100), uint32(0xDEADBEEF))
+
+	f.Fuzz(func(t *testing.T, secret, body []byte, version, seqNo uint8, sessionID uint32) {
+		if len(secret) == 0 || len(body) == 0 {
+			return
+		}
+
+		header := &Header{
+			Version:   version,
+			SeqNo:     seqNo,
+			SessionID: sessionID,
+		}
+
+		obfuscated := Obfuscate(header, secret, body)
+		if obfuscated == nil {
+			t.Fatal("obfuscate returned nil for non-empty body")
+		}
+
+		if len(obfuscated) != len(body) {
+			t.Fatalf("obfuscated length mismatch: got %d, want %d", len(obfuscated), len(body))
+		}
+
+		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		if len(deobfuscated) != len(body) {
+			t.Fatalf("deobfuscated length mismatch: got %d, want %d", len(deobfuscated), len(body))
+		}
+
+		for i := range body {
+			if deobfuscated[i] != body[i] {
+				t.Fatalf("roundtrip mismatch at byte %d: got %02x, want %02x", i, deobfuscated[i], body[i])
+			}
+		}
+	})
+}

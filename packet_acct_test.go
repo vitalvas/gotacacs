@@ -464,3 +464,158 @@ func TestAcctRequestEmptyArgs(t *testing.T) {
 		assert.Equal(t, []byte("task_id=1"), decoded.Args[1])
 	})
 }
+
+func BenchmarkAcctRequestMarshalBinary(b *testing.B) {
+	pkt := &AcctRequest{
+		Flags:        AcctFlagStart,
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    15,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("operator"),
+		Port:         []byte("vty1"),
+		RemoteAddr:   []byte("172.16.0.50"),
+	}
+	pkt.AddArg("task_id=12345")
+	pkt.AddArg("start_time=1234567890")
+	pkt.AddArg("service=shell")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = pkt.MarshalBinary()
+	}
+}
+
+func BenchmarkAcctRequestUnmarshalBinary(b *testing.B) {
+	pkt := &AcctRequest{
+		Flags:        AcctFlagStart,
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    15,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("operator"),
+		Port:         []byte("vty1"),
+		RemoteAddr:   []byte("172.16.0.50"),
+	}
+	pkt.AddArg("task_id=12345")
+	pkt.AddArg("start_time=1234567890")
+	pkt.AddArg("service=shell")
+	data, _ := pkt.MarshalBinary()
+	target := &AcctRequest{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func BenchmarkAcctReplyMarshalBinary(b *testing.B) {
+	pkt := &AcctReply{
+		Status:    AcctStatusSuccess,
+		ServerMsg: []byte("Accounting record accepted"),
+		Data:      []byte("record-id=99999"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = pkt.MarshalBinary()
+	}
+}
+
+func BenchmarkAcctReplyUnmarshalBinary(b *testing.B) {
+	pkt := &AcctReply{
+		Status:    AcctStatusSuccess,
+		ServerMsg: []byte("Accounting record accepted"),
+		Data:      []byte("record-id=99999"),
+	}
+	data, _ := pkt.MarshalBinary()
+	target := &AcctReply{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = target.UnmarshalBinary(data)
+	}
+}
+
+func FuzzAcctRequestUnmarshalBinary(f *testing.F) {
+	validPkt := &AcctRequest{
+		Flags:        AcctFlagStart,
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    15,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("operator"),
+		Port:         []byte("vty1"),
+		RemoteAddr:   []byte("172.16.0.50"),
+	}
+	validPkt.AddArg("task_id=12345")
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AcctRequest{Flags: AcctFlagStop, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x02, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AcctRequest{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AcctRequest{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}
+
+func FuzzAcctReplyUnmarshalBinary(f *testing.F) {
+	validPkt := &AcctReply{
+		Status:    AcctStatusSuccess,
+		ServerMsg: []byte("Recorded"),
+		Data:      []byte("id=123"),
+	}
+	if data, err := validPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	minPkt := &AcctReply{Status: AcctStatusError}
+	if data, err := minPkt.MarshalBinary(); err == nil {
+		f.Add(data)
+	}
+
+	f.Add([]byte{0x00, 0x00, 0x00, 0x00, 0x01})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0x02})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p := &AcctReply{}
+		err := p.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		p2 := &AcctReply{}
+		if err := p2.UnmarshalBinary(marshaled); err != nil {
+			t.Fatalf("second unmarshal failed: %v", err)
+		}
+	})
+}

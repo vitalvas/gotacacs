@@ -42,4 +42,16 @@ var (
 
 	// ErrBodyTooLarge indicates the packet body exceeds maximum size.
 	ErrBodyTooLarge = errors.New("body too large")
+
+	// ErrAuthenFollow indicates the server requested authentication follow.
+	// The client should connect to an alternate server specified in ServerMsg.
+	ErrAuthenFollow = errors.New("authentication follow requested")
+
+	// ErrAuthenRestart indicates the server requested authentication restart.
+	// The client should restart authentication from the beginning.
+	ErrAuthenRestart = errors.New("authentication restart requested")
+
+	// ErrSequenceOverflow indicates the sequence number would overflow.
+	// This happens after 255 packets in a session.
+	ErrSequenceOverflow = errors.New("sequence number overflow")
 )

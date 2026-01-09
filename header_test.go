@@ -427,3 +427,73 @@ func TestHeaderBoundaryConditions(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func BenchmarkHeaderMarshalBinary(b *testing.B) {
+	h := &Header{
+		Version:   0xc0,
+		Type:      PacketTypeAuthen,
+		SeqNo:     1,
+		Flags:     0,
+		SessionID: 0x12345678,
+		Length:    256,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = h.MarshalBinary()
+	}
+}
+
+func BenchmarkHeaderUnmarshalBinary(b *testing.B) {
+	data := []byte{0xc0, 0x01, 0x01, 0x00, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x01, 0x00}
+	h := &Header{}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = h.UnmarshalBinary(data)
+	}
+}
+
+func BenchmarkHeaderValidate(b *testing.B) {
+	h := &Header{
+		Version: 0xc0,
+		Type:    PacketTypeAuthen,
+		SeqNo:   1,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = h.Validate()
+	}
+}
+
+func FuzzHeaderUnmarshalBinary(f *testing.F) {
+	f.Add([]byte{0xc0, 0x01, 0x01, 0x00, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x01, 0x00})
+	f.Add([]byte{0xc1, 0x02, 0x02, 0x05, 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
+	f.Add([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		h := &Header{}
+		err := h.UnmarshalBinary(data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := h.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful unmarshal: %v", err)
+		}
+
+		if len(data) >= HeaderLength {
+			for i := range HeaderLength {
+				if marshaled[i] != data[i] {
+					t.Fatalf("roundtrip mismatch at byte %d: got %02x, want %02x", i, marshaled[i], data[i])
+				}
+			}
+		}
+	})
+}

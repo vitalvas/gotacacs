@@ -72,25 +72,54 @@ func TestSessionSequenceNumbers(t *testing.T) {
 		session := NewSessionWithID(1, true)
 
 		// First call returns 1
-		assert.Equal(t, uint8(1), session.NextSeqNo())
+		seqNo, err := session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(1), seqNo)
 		assert.Equal(t, SessionStateActive, session.State())
 
 		// Subsequent calls increment
-		assert.Equal(t, uint8(2), session.NextSeqNo())
-		assert.Equal(t, uint8(3), session.NextSeqNo())
-		assert.Equal(t, uint8(4), session.NextSeqNo())
+		seqNo, err = session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(2), seqNo)
+
+		seqNo, err = session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(3), seqNo)
+
+		seqNo, err = session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(4), seqNo)
 	})
 
 	t.Run("server sequence numbers", func(t *testing.T) {
 		session := NewSessionWithID(1, false)
 
 		// First call returns 2
-		assert.Equal(t, uint8(2), session.NextSeqNo())
+		seqNo, err := session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(2), seqNo)
 		assert.Equal(t, SessionStateActive, session.State())
 
 		// Subsequent calls increment
-		assert.Equal(t, uint8(3), session.NextSeqNo())
-		assert.Equal(t, uint8(4), session.NextSeqNo())
+		seqNo, err = session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(3), seqNo)
+
+		seqNo, err = session.NextSeqNo()
+		require.NoError(t, err)
+		assert.Equal(t, uint8(4), seqNo)
+	})
+
+	t.Run("sequence number overflow", func(t *testing.T) {
+		session := NewSessionWithID(1, true)
+		// Set sequence to 255 (max value)
+		session.mu.Lock()
+		session.seqNo = 255
+		session.mu.Unlock()
+
+		// Next call should return error
+		_, err := session.NextSeqNo()
+		assert.ErrorIs(t, err, ErrSequenceOverflow)
 	})
 }
 
@@ -99,7 +128,8 @@ func TestSessionValidateSeqNo(t *testing.T) {
 		session := NewSessionWithID(1, true)
 
 		// Client sent seq 1
-		session.NextSeqNo()
+		_, err := session.NextSeqNo()
+		require.NoError(t, err)
 
 		// Server should respond with seq 2
 		assert.True(t, session.ValidateSeqNo(2))
@@ -122,7 +152,8 @@ func TestSessionValidateSeqNo(t *testing.T) {
 		session.UpdateSeqNo(1) // Received seq 1 from client
 
 		// Server sent seq 2
-		session.NextSeqNo()
+		_, err := session.NextSeqNo()
+		require.NoError(t, err)
 
 		// Next client packet should be seq 3
 		assert.True(t, session.ValidateSeqNo(3))
@@ -364,5 +395,76 @@ func TestGenerateSessionID(t *testing.T) {
 		}
 		// Should have mostly unique IDs (collisions extremely unlikely)
 		assert.True(t, len(ids) >= 99)
+	})
+}
+
+func BenchmarkNewSession(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = NewSession(true)
+	}
+}
+
+func BenchmarkSessionNextSeqNo(b *testing.B) {
+	session, _ := NewSession(true)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = session.NextSeqNo()
+	}
+}
+
+func BenchmarkSessionValidateSeqNo(b *testing.B) {
+	session, _ := NewSession(false) // server session
+	session.UpdateSeqNo(1)          // simulate client sent seq 1
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = session.ValidateSeqNo(3) // validate next expected client seq
+	}
+}
+
+func BenchmarkMemorySessionStoreOperations(b *testing.B) {
+	b.Run("Put", func(b *testing.B) {
+		store := NewMemorySessionStore()
+		sessions := make([]*Session, b.N)
+		for i := range sessions {
+			sessions[i] = NewSessionWithID(uint32(i), true)
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			store.Put(sessions[i])
+		}
+	})
+
+	b.Run("Get", func(b *testing.B) {
+		store := NewMemorySessionStore()
+		for i := range 1000 {
+			store.Put(NewSessionWithID(uint32(i), true))
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, _ = store.Get(uint32(i % 1000))
+		}
+	})
+
+	b.Run("Delete", func(b *testing.B) {
+		store := NewMemorySessionStore()
+		for i := range b.N {
+			store.Put(NewSessionWithID(uint32(i), true))
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			store.Delete(uint32(i))
+		}
 	})
 }
