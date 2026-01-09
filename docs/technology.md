@@ -43,6 +43,9 @@ gotacacs/
 │   └── tacacs-server/     # Example server binary
 ├── docs/
 │   └── technology.md      # This file
+├── doc.go                 # Package documentation
+├── const.go               # Protocol constants
+├── errors.go              # Error definitions
 ├── header.go              # Fixed header implementation
 ├── packet.go              # Packet interface and common types
 ├── packet_authen.go       # Authentication packets
@@ -53,9 +56,9 @@ gotacacs/
 ├── server.go              # Server SDK
 ├── transport.go           # Transport abstraction
 ├── session.go             # Session management
-├── options.go             # Configuration options
-├── errors.go              # Error definitions
+├── integration_test.go    # End-to-end tests
 ├── go.mod
 ├── go.sum
-└── roadmap.md
+├── roadmap.md
+└── README.md
 ```
