@@ -222,11 +222,11 @@ func (c *Client) newSession() (*Session, error) {
 
 // AuthenticateContext holds the context for multi-step authentication.
 type AuthenticateContext struct {
-	Session  *Session
-	Username string
-	Password string
-	Port     string
-	RemAddr  string
+	Session    *Session
+	Username   string
+	Password   string
+	Port       string
+	RemoteAddr string
 }
 
 // Authenticate performs authentication with the TACACS+ server.
@@ -262,12 +262,12 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	// Create START packet
 	start := &AuthenStart{
 		Action:     AuthenActionLogin,
-		PrivLvl:    1,
+		PrivLevel:  1,
 		AuthenType: AuthenTypePAP, // Use PAP for simple password auth
 		Service:    AuthenServiceLogin,
 		User:       []byte(authCtx.Username),
 		Port:       []byte(authCtx.Port),
-		RemAddr:    []byte(authCtx.RemAddr),
+		RemoteAddr: []byte(authCtx.RemoteAddr),
 		Data:       []byte(authCtx.Password), // PAP sends password in START
 	}
 
@@ -347,7 +347,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 	// Create START packet for ASCII auth
 	start := &AuthenStart{
 		Action:     AuthenActionLogin,
-		PrivLvl:    1,
+		PrivLevel:  1,
 		AuthenType: AuthenTypeASCII,
 		Service:    AuthenServiceLogin,
 		User:       []byte(username),
@@ -464,7 +464,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	// Create REQUEST packet
 	req := &AuthorRequest{
 		AuthenMethod: AuthenTypePAP,
-		PrivLvl:      1,
+		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
 		User:         []byte(username),
@@ -547,7 +547,7 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	req := &AcctRequest{
 		Flags:        flags,
 		AuthenMethod: AuthenTypePAP,
-		PrivLvl:      1,
+		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
 		User:         []byte(username),

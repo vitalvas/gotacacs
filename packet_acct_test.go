@@ -14,7 +14,7 @@ func TestNewAcctRequest(t *testing.T) {
 		p := NewAcctRequest(AcctFlagStart, AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "testuser")
 		assert.Equal(t, uint8(AcctFlagStart), p.Flags)
 		assert.Equal(t, uint8(AuthenTypePAP), p.AuthenMethod)
-		assert.Equal(t, uint8(1), p.PrivLvl)
+		assert.Equal(t, uint8(1), p.PrivLevel)
 		assert.Equal(t, uint8(AuthenTypeASCII), p.AuthenType)
 		assert.Equal(t, uint8(AuthenServiceLogin), p.Service)
 		assert.Equal(t, []byte("testuser"), p.User)
@@ -93,7 +93,7 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStart,
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 		}
@@ -110,12 +110,12 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStop,
 			AuthenMethod: AuthenTypeCHAP,
-			PrivLvl:      15,
+			PrivLevel:    15,
 			AuthenType:   AuthenTypePAP,
 			Service:      AuthenServicePPP,
 			User:         []byte("admin"),
 			Port:         []byte("tty0"),
-			RemAddr:      []byte("192.168.1.1"),
+			RemoteAddr:   []byte("192.168.1.1"),
 			Args:         [][]byte{[]byte("task_id=1"), []byte("elapsed_time=100")},
 		}
 
@@ -208,7 +208,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			packet: &AcctRequest{
 				Flags:        AcctFlagStart,
 				AuthenMethod: AuthenTypePAP,
-				PrivLvl:      1,
+				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
 			},
@@ -218,7 +218,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			packet: &AcctRequest{
 				Flags:        AcctFlagStop,
 				AuthenMethod: AuthenTypePAP,
-				PrivLvl:      15,
+				PrivLevel:    15,
 				AuthenType:   AuthenTypePAP,
 				Service:      AuthenServiceEnable,
 				User:         []byte("administrator"),
@@ -229,7 +229,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			packet: &AcctRequest{
 				Flags:        AcctFlagWatchdog,
 				AuthenMethod: AuthenTypeCHAP,
-				PrivLvl:      1,
+				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
 				User:         []byte("user"),
@@ -241,12 +241,12 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			packet: &AcctRequest{
 				Flags:        AcctFlagStop | AcctFlagWatchdog,
 				AuthenMethod: AuthenTypeMSCHAP,
-				PrivLvl:      0,
+				PrivLevel:    0,
 				AuthenType:   AuthenTypeCHAP,
 				Service:      AuthenServicePPP,
 				User:         []byte("user"),
 				Port:         []byte("console"),
-				RemAddr:      []byte("10.0.0.1"),
+				RemoteAddr:   []byte("10.0.0.1"),
 				Args:         [][]byte{[]byte("elapsed_time=120"), []byte("protocol=ip")},
 			},
 		},
@@ -265,12 +265,12 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 
 			assert.Equal(t, tc.packet.Flags, decoded.Flags, "flags mismatch")
 			assert.Equal(t, tc.packet.AuthenMethod, decoded.AuthenMethod, "authen_method mismatch")
-			assert.Equal(t, tc.packet.PrivLvl, decoded.PrivLvl, "priv_lvl mismatch")
+			assert.Equal(t, tc.packet.PrivLevel, decoded.PrivLevel, "priv_lvl mismatch")
 			assert.Equal(t, tc.packet.AuthenType, decoded.AuthenType, "authen_type mismatch")
 			assert.Equal(t, tc.packet.Service, decoded.Service, "service mismatch")
 			assert.Equal(t, tc.packet.User, decoded.User, "user mismatch")
 			assert.Equal(t, tc.packet.Port, decoded.Port, "port mismatch")
-			assert.Equal(t, tc.packet.RemAddr, decoded.RemAddr, "rem_addr mismatch")
+			assert.Equal(t, tc.packet.RemoteAddr, decoded.RemoteAddr, "rem_addr mismatch")
 			require.Equal(t, len(tc.packet.Args), len(decoded.Args), "args count mismatch")
 			for i := range tc.packet.Args {
 				assert.Equal(t, tc.packet.Args[i], decoded.Args[i], "arg %d mismatch", i)
@@ -447,7 +447,7 @@ func TestAcctRequestEmptyArgs(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStart,
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 			Args:         [][]byte{[]byte(""), []byte("task_id=1")},

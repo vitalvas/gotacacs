@@ -13,12 +13,12 @@ func TestNewAuthenStart(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
 		p := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "testuser")
 		assert.Equal(t, uint8(AuthenActionLogin), p.Action)
-		assert.Equal(t, uint8(1), p.PrivLvl)
+		assert.Equal(t, uint8(1), p.PrivLevel)
 		assert.Equal(t, uint8(AuthenTypeASCII), p.AuthenType)
 		assert.Equal(t, uint8(AuthenServiceLogin), p.Service)
 		assert.Equal(t, []byte("testuser"), p.User)
 		assert.Nil(t, p.Port)
-		assert.Nil(t, p.RemAddr)
+		assert.Nil(t, p.RemoteAddr)
 		assert.Nil(t, p.Data)
 	})
 
@@ -32,7 +32,7 @@ func TestAuthenStartMarshalBinary(t *testing.T) {
 	t.Run("minimal packet", func(t *testing.T) {
 		p := &AuthenStart{
 			Action:     AuthenActionLogin,
-			PrivLvl:    1,
+			PrivLevel:  1,
 			AuthenType: AuthenTypeASCII,
 			Service:    AuthenServiceLogin,
 		}
@@ -54,12 +54,12 @@ func TestAuthenStartMarshalBinary(t *testing.T) {
 	t.Run("with all fields", func(t *testing.T) {
 		p := &AuthenStart{
 			Action:     AuthenActionChPass,
-			PrivLvl:    15,
+			PrivLevel:  15,
 			AuthenType: AuthenTypePAP,
 			Service:    AuthenServicePPP,
 			User:       []byte("admin"),
 			Port:       []byte("tty0"),
-			RemAddr:    []byte("192.168.1.1"),
+			RemoteAddr: []byte("192.168.1.1"),
 			Data:       []byte("password"),
 		}
 
@@ -104,12 +104,12 @@ func TestAuthenStartUnmarshalBinary(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, uint8(1), p.Action)
-		assert.Equal(t, uint8(1), p.PrivLvl)
+		assert.Equal(t, uint8(1), p.PrivLevel)
 		assert.Equal(t, uint8(1), p.AuthenType)
 		assert.Equal(t, uint8(1), p.Service)
 		assert.Nil(t, p.User)
 		assert.Nil(t, p.Port)
-		assert.Nil(t, p.RemAddr)
+		assert.Nil(t, p.RemoteAddr)
 		assert.Nil(t, p.Data)
 	})
 
@@ -141,7 +141,7 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "minimal",
 			packet: &AuthenStart{
 				Action:     AuthenActionLogin,
-				PrivLvl:    1,
+				PrivLevel:  1,
 				AuthenType: AuthenTypeASCII,
 				Service:    AuthenServiceLogin,
 			},
@@ -150,7 +150,7 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "with user",
 			packet: &AuthenStart{
 				Action:     AuthenActionLogin,
-				PrivLvl:    15,
+				PrivLevel:  15,
 				AuthenType: AuthenTypePAP,
 				Service:    AuthenServiceEnable,
 				User:       []byte("administrator"),
@@ -160,12 +160,12 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "all fields",
 			packet: &AuthenStart{
 				Action:     AuthenActionSendAuth,
-				PrivLvl:    0,
+				PrivLevel:  0,
 				AuthenType: AuthenTypeCHAP,
 				Service:    AuthenServicePPP,
 				User:       []byte("user"),
 				Port:       []byte("console"),
-				RemAddr:    []byte("10.0.0.1"),
+				RemoteAddr: []byte("10.0.0.1"),
 				Data:       []byte{0x01, 0x02, 0x03, 0x04},
 			},
 		},
@@ -173,12 +173,12 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "max length fields",
 			packet: &AuthenStart{
 				Action:     AuthenActionLogin,
-				PrivLvl:    1,
+				PrivLevel:  1,
 				AuthenType: AuthenTypeASCII,
 				Service:    AuthenServiceLogin,
 				User:       bytes.Repeat([]byte("u"), 255),
 				Port:       bytes.Repeat([]byte("p"), 255),
-				RemAddr:    bytes.Repeat([]byte("r"), 255),
+				RemoteAddr: bytes.Repeat([]byte("r"), 255),
 				Data:       bytes.Repeat([]byte("d"), 255),
 			},
 		},
@@ -194,12 +194,12 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.packet.Action, decoded.Action)
-			assert.Equal(t, tc.packet.PrivLvl, decoded.PrivLvl)
+			assert.Equal(t, tc.packet.PrivLevel, decoded.PrivLevel)
 			assert.Equal(t, tc.packet.AuthenType, decoded.AuthenType)
 			assert.Equal(t, tc.packet.Service, decoded.Service)
 			assert.Equal(t, tc.packet.User, decoded.User)
 			assert.Equal(t, tc.packet.Port, decoded.Port)
-			assert.Equal(t, tc.packet.RemAddr, decoded.RemAddr)
+			assert.Equal(t, tc.packet.RemoteAddr, decoded.RemoteAddr)
 			assert.Equal(t, tc.packet.Data, decoded.Data)
 		})
 	}

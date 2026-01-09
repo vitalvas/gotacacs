@@ -8,12 +8,12 @@ import (
 // This packet is sent by the client to request authorization for a specific action.
 type AuthorRequest struct {
 	AuthenMethod uint8    // Authentication method used
-	PrivLvl      uint8    // Privilege level
+	PrivLevel    uint8    // Privilege level
 	AuthenType   uint8    // Authentication type
 	Service      uint8    // Authentication service
 	User         []byte   // Username
 	Port         []byte   // Port identifier
-	RemAddr      []byte   // Remote address
+	RemoteAddr   []byte   // Remote address
 	Args         [][]byte // Authorization arguments
 }
 
@@ -21,7 +21,7 @@ type AuthorRequest struct {
 func NewAuthorRequest(authenMethod, authenType, service uint8, user string) *AuthorRequest {
 	return &AuthorRequest{
 		AuthenMethod: authenMethod,
-		PrivLvl:      1, // Default privilege level
+		PrivLevel:    1, // Default privilege level
 		AuthenType:   authenType,
 		Service:      service,
 		User:         []byte(user),
@@ -46,7 +46,7 @@ func (p *AuthorRequest) GetArgs() []string {
 func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)
 	portLen := len(p.Port)
-	remAddrLen := len(p.RemAddr)
+	remAddrLen := len(p.RemoteAddr)
 	argCount := len(p.Args)
 
 	if userLen > 255 || portLen > 255 || remAddrLen > 255 {
@@ -70,7 +70,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, size)
 
 	buf[0] = p.AuthenMethod
-	buf[1] = p.PrivLvl
+	buf[1] = p.PrivLevel
 	buf[2] = p.AuthenType
 	buf[3] = p.Service
 	buf[4] = uint8(userLen)
@@ -91,7 +91,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	offset += userLen
 	copy(buf[offset:], p.Port)
 	offset += portLen
-	copy(buf[offset:], p.RemAddr)
+	copy(buf[offset:], p.RemoteAddr)
 	offset += remAddrLen
 
 	// Write arguments
@@ -110,7 +110,7 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 	}
 
 	p.AuthenMethod = data[0]
-	p.PrivLvl = data[1]
+	p.PrivLevel = data[1]
 	p.AuthenType = data[2]
 	p.Service = data[3]
 
@@ -156,8 +156,8 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 	offset += portLen
 
 	if remAddrLen > 0 {
-		p.RemAddr = make([]byte, remAddrLen)
-		copy(p.RemAddr, data[offset:offset+remAddrLen])
+		p.RemoteAddr = make([]byte, remAddrLen)
+		copy(p.RemoteAddr, data[offset:offset+remAddrLen])
 	}
 	offset += remAddrLen
 

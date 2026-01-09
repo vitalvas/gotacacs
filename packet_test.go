@@ -60,7 +60,7 @@ func TestParseAuthenPacket(t *testing.T) {
 	t.Run("parse START (seq=1)", func(t *testing.T) {
 		original := &AuthenStart{
 			Action:     AuthenActionLogin,
-			PrivLvl:    1,
+			PrivLevel:  1,
 			AuthenType: AuthenTypeASCII,
 			Service:    AuthenServiceLogin,
 			User:       []byte("testuser"),
@@ -165,7 +165,7 @@ func TestParseAuthorPacket(t *testing.T) {
 	t.Run("parse REQUEST (seq=1)", func(t *testing.T) {
 		original := &AuthorRequest{
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 			User:         []byte("testuser"),
@@ -227,7 +227,7 @@ func TestParseAcctPacket(t *testing.T) {
 		original := &AcctRequest{
 			Flags:        AcctFlagStart,
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 			User:         []byte("testuser"),
@@ -289,7 +289,7 @@ func TestParsePacket(t *testing.T) {
 		header := &Header{Type: PacketTypeAuthen, SeqNo: 1}
 		original := &AuthenStart{
 			Action:     AuthenActionLogin,
-			PrivLvl:    1,
+			PrivLevel:  1,
 			AuthenType: AuthenTypeASCII,
 			Service:    AuthenServiceLogin,
 		}
@@ -305,7 +305,7 @@ func TestParsePacket(t *testing.T) {
 		header := &Header{Type: PacketTypeAuthor, SeqNo: 1}
 		original := &AuthorRequest{
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 		}
@@ -322,7 +322,7 @@ func TestParsePacket(t *testing.T) {
 		original := &AcctRequest{
 			Flags:        AcctFlagStart,
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 		}

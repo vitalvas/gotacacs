@@ -9,12 +9,12 @@ import (
 // This packet is sent by the client to initiate an authentication session.
 type AuthenStart struct {
 	Action     uint8  // Authentication action (LOGIN, CHPASS, SENDAUTH)
-	PrivLvl    uint8  // Privilege level
+	PrivLevel  uint8  // Privilege level
 	AuthenType uint8  // Authentication type (ASCII, PAP, CHAP, etc.)
 	Service    uint8  // Authentication service (LOGIN, ENABLE, etc.)
 	User       []byte // Username (optional)
 	Port       []byte // Port identifier (optional)
-	RemAddr    []byte // Remote address (optional)
+	RemoteAddr []byte // Remote address (optional)
 	Data       []byte // Authentication data (optional)
 }
 
@@ -22,7 +22,7 @@ type AuthenStart struct {
 func NewAuthenStart(action, authenType, service uint8, user string) *AuthenStart {
 	return &AuthenStart{
 		Action:     action,
-		PrivLvl:    1, // Default privilege level
+		PrivLevel:  1, // Default privilege level
 		AuthenType: authenType,
 		Service:    service,
 		User:       []byte(user),
@@ -33,7 +33,7 @@ func NewAuthenStart(action, authenType, service uint8, user string) *AuthenStart
 func (p *AuthenStart) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)
 	portLen := len(p.Port)
-	remAddrLen := len(p.RemAddr)
+	remAddrLen := len(p.RemoteAddr)
 	dataLen := len(p.Data)
 
 	if userLen > 255 || portLen > 255 || remAddrLen > 255 || dataLen > 255 {
@@ -45,7 +45,7 @@ func (p *AuthenStart) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, size)
 
 	buf[0] = p.Action
-	buf[1] = p.PrivLvl
+	buf[1] = p.PrivLevel
 	buf[2] = p.AuthenType
 	buf[3] = p.Service
 	buf[4] = uint8(userLen)
@@ -58,7 +58,7 @@ func (p *AuthenStart) MarshalBinary() ([]byte, error) {
 	offset += userLen
 	copy(buf[offset:], p.Port)
 	offset += portLen
-	copy(buf[offset:], p.RemAddr)
+	copy(buf[offset:], p.RemoteAddr)
 	offset += remAddrLen
 	copy(buf[offset:], p.Data)
 
@@ -72,7 +72,7 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 	}
 
 	p.Action = data[0]
-	p.PrivLvl = data[1]
+	p.PrivLevel = data[1]
 	p.AuthenType = data[2]
 	p.Service = data[3]
 
@@ -100,8 +100,8 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 	offset += portLen
 
 	if remAddrLen > 0 {
-		p.RemAddr = make([]byte, remAddrLen)
-		copy(p.RemAddr, data[offset:offset+remAddrLen])
+		p.RemoteAddr = make([]byte, remAddrLen)
+		copy(p.RemoteAddr, data[offset:offset+remAddrLen])
 	}
 	offset += remAddrLen
 

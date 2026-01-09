@@ -13,12 +13,12 @@ func TestNewAuthorRequest(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
 		p := NewAuthorRequest(AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "testuser")
 		assert.Equal(t, uint8(AuthenTypePAP), p.AuthenMethod)
-		assert.Equal(t, uint8(1), p.PrivLvl)
+		assert.Equal(t, uint8(1), p.PrivLevel)
 		assert.Equal(t, uint8(AuthenTypeASCII), p.AuthenType)
 		assert.Equal(t, uint8(AuthenServiceLogin), p.Service)
 		assert.Equal(t, []byte("testuser"), p.User)
 		assert.Nil(t, p.Port)
-		assert.Nil(t, p.RemAddr)
+		assert.Nil(t, p.RemoteAddr)
 		assert.Nil(t, p.Args)
 	})
 }
@@ -63,7 +63,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 	t.Run("empty request encoding", func(t *testing.T) {
 		p := &AuthorRequest{
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 		}
@@ -79,12 +79,12 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 	t.Run("with all fields and args", func(t *testing.T) {
 		p := &AuthorRequest{
 			AuthenMethod: AuthenTypeCHAP,
-			PrivLvl:      15,
+			PrivLevel:    15,
 			AuthenType:   AuthenTypePAP,
 			Service:      AuthenServicePPP,
 			User:         []byte("admin"),
 			Port:         []byte("tty0"),
-			RemAddr:      []byte("192.168.1.1"),
+			RemoteAddr:   []byte("192.168.1.1"),
 			Args:         [][]byte{[]byte("service=shell"), []byte("cmd=show")},
 		}
 
@@ -143,7 +143,7 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, uint8(0x02), p.AuthenMethod)
-		assert.Equal(t, uint8(0x01), p.PrivLvl)
+		assert.Equal(t, uint8(0x01), p.PrivLevel)
 		assert.Nil(t, p.User)
 		assert.Nil(t, p.Args)
 	})
@@ -186,7 +186,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "minimal",
 			packet: &AuthorRequest{
 				AuthenMethod: AuthenTypePAP,
-				PrivLvl:      1,
+				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
 			},
@@ -195,7 +195,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "with user",
 			packet: &AuthorRequest{
 				AuthenMethod: AuthenTypePAP,
-				PrivLvl:      15,
+				PrivLevel:    15,
 				AuthenType:   AuthenTypePAP,
 				Service:      AuthenServiceEnable,
 				User:         []byte("administrator"),
@@ -205,7 +205,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "with args",
 			packet: &AuthorRequest{
 				AuthenMethod: AuthenTypeCHAP,
-				PrivLvl:      1,
+				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
 				User:         []byte("user"),
@@ -216,12 +216,12 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "all fields",
 			packet: &AuthorRequest{
 				AuthenMethod: AuthenTypeMSCHAP,
-				PrivLvl:      0,
+				PrivLevel:    0,
 				AuthenType:   AuthenTypeCHAP,
 				Service:      AuthenServicePPP,
 				User:         []byte("user"),
 				Port:         []byte("console"),
-				RemAddr:      []byte("10.0.0.1"),
+				RemoteAddr:   []byte("10.0.0.1"),
 				Args:         [][]byte{[]byte("service=ppp"), []byte("protocol=ip")},
 			},
 		},
@@ -230,7 +230,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			packet: func() *AuthorRequest {
 				p := &AuthorRequest{
 					AuthenMethod: AuthenTypePAP,
-					PrivLvl:      1,
+					PrivLevel:    1,
 					AuthenType:   AuthenTypeASCII,
 					Service:      AuthenServiceLogin,
 				}
@@ -255,12 +255,12 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 
 			// Verify authorization request specific structure
 			assert.Equal(t, tc.packet.AuthenMethod, decoded.AuthenMethod, "authen_method mismatch")
-			assert.Equal(t, tc.packet.PrivLvl, decoded.PrivLvl, "priv_lvl mismatch")
+			assert.Equal(t, tc.packet.PrivLevel, decoded.PrivLevel, "priv_lvl mismatch")
 			assert.Equal(t, tc.packet.AuthenType, decoded.AuthenType, "authen_type mismatch")
 			assert.Equal(t, tc.packet.Service, decoded.Service, "service mismatch")
 			assert.Equal(t, tc.packet.User, decoded.User, "user mismatch")
 			assert.Equal(t, tc.packet.Port, decoded.Port, "port mismatch")
-			assert.Equal(t, tc.packet.RemAddr, decoded.RemAddr, "rem_addr mismatch")
+			assert.Equal(t, tc.packet.RemoteAddr, decoded.RemoteAddr, "rem_addr mismatch")
 			assert.Equal(t, len(tc.packet.Args), len(decoded.Args), "args count mismatch")
 			for i := range tc.packet.Args {
 				assert.Equal(t, tc.packet.Args[i], decoded.Args[i], "arg %d mismatch", i)
@@ -498,7 +498,7 @@ func TestAuthorRequestEmptyArgs(t *testing.T) {
 	t.Run("zero length arg in list", func(t *testing.T) {
 		p := &AuthorRequest{
 			AuthenMethod: AuthenTypePAP,
-			PrivLvl:      1,
+			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
 			Args:         [][]byte{[]byte(""), []byte("test")},
