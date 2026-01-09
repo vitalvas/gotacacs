@@ -34,7 +34,7 @@
 //	}
 //
 //	// Send accounting records
-//	acctReply, err := client.AccountingStart(ctx, "username", []string{"task_id=123"})
+//	acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{"task_id=123"})
 //	if err != nil {
 //		log.Fatal(err)
 //	}

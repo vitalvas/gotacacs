@@ -72,24 +72,7 @@ func TestObfuscate(t *testing.T) {
 	})
 }
 
-func TestDeobfuscate(t *testing.T) {
-	t.Run("deobfuscate is alias for obfuscate", func(t *testing.T) {
-		header := &Header{
-			Version:   0xc0,
-			SeqNo:     1,
-			SessionID: 0x12345678,
-		}
-		secret := []byte("testsecret")
-		body := []byte("test data")
-
-		obfuscated := Obfuscate(header, secret, body)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
-
-		assert.Equal(t, body, deobfuscated)
-	})
-}
-
-func TestObfuscateDeobfuscateRoundtrip(t *testing.T) {
+func TestObfuscateRoundtrip(t *testing.T) {
 	testCases := []struct {
 		name   string
 		header *Header
@@ -164,7 +147,7 @@ func TestObfuscateDeobfuscateRoundtrip(t *testing.T) {
 			require.NotNil(t, obfuscated)
 			require.Len(t, obfuscated, len(tc.body))
 
-			deobfuscated := Deobfuscate(tc.header, tc.secret, obfuscated)
+			deobfuscated := Obfuscate(tc.header, tc.secret, obfuscated)
 			assert.Equal(t, tc.body, deobfuscated)
 		})
 	}
@@ -354,7 +337,7 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		obfuscated := Obfuscate(header, secret, body)
 		assert.Len(t, obfuscated, 1)
 
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		assert.Equal(t, body, deobfuscated)
 	})
 
@@ -364,7 +347,7 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		body := []byte("test data")
 
 		obfuscated := Obfuscate(header, secret, body)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		assert.Equal(t, body, deobfuscated)
 	})
 
@@ -374,7 +357,7 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		body := []byte("test data")
 
 		obfuscated := Obfuscate(header, secret, body)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		assert.Equal(t, body, deobfuscated)
 	})
 
@@ -384,7 +367,7 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		body := []byte("test data")
 
 		obfuscated := Obfuscate(header, secret, body)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		assert.Equal(t, body, deobfuscated)
 	})
 
@@ -394,7 +377,7 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		body := []byte("test data")
 
 		obfuscated := Obfuscate(header, secret, body)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		assert.Equal(t, body, deobfuscated)
 	})
 }
@@ -431,30 +414,6 @@ func BenchmarkObfuscate(b *testing.B) {
 	}
 }
 
-func BenchmarkDeobfuscate(b *testing.B) {
-	sizes := []int{16, 64, 256, 1024, 4096}
-
-	for _, size := range sizes {
-		b.Run(byteSizeName(size), func(b *testing.B) {
-			header := &Header{
-				Version:   0xc0,
-				SeqNo:     1,
-				SessionID: 0x12345678,
-			}
-			secret := []byte("testsecret123456")
-			body := bytes.Repeat([]byte("x"), size)
-			obfuscated := Obfuscate(header, secret, body)
-
-			b.ReportAllocs()
-			b.SetBytes(int64(size))
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = Deobfuscate(header, secret, obfuscated)
-			}
-		})
-	}
-}
-
 func BenchmarkGeneratePseudoPad(b *testing.B) {
 	sizes := []int{md5.Size, md5.Size * 2, md5.Size * 4, md5.Size * 16}
 
@@ -476,7 +435,7 @@ func BenchmarkGeneratePseudoPad(b *testing.B) {
 	}
 }
 
-func FuzzObfuscateDeobfuscate(f *testing.F) {
+func FuzzObfuscateRoundtrip(f *testing.F) {
 	f.Add([]byte("secret"), []byte("hello world"), uint8(0xc0), uint8(1), uint32(0x12345678))
 	f.Add([]byte("s"), []byte("x"), uint8(0xc1), uint8(255), uint32(0xFFFFFFFF))
 	f.Add([]byte("longsecretkey12345"), []byte("longer body data here that spans multiple md5 blocks"), uint8(0xc0), uint8(100), uint32(0xDEADBEEF))
@@ -501,7 +460,7 @@ func FuzzObfuscateDeobfuscate(f *testing.F) {
 			t.Fatalf("obfuscated length mismatch: got %d, want %d", len(obfuscated), len(body))
 		}
 
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		if len(deobfuscated) != len(body) {
 			t.Fatalf("deobfuscated length mismatch: got %d, want %d", len(deobfuscated), len(body))
 		}

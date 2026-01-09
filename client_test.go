@@ -181,8 +181,8 @@ func TestClientAuthenticate(t *testing.T) {
 			body := make([]byte, header.Length)
 			io.ReadFull(conn, body)
 
-			// Deobfuscate
-			body = Deobfuscate(header, secret, body)
+			// Deobfuscate (Obfuscate is symmetric)
+			body = Obfuscate(header, secret, body)
 
 			// Parse START
 			start := &AuthenStart{}
@@ -349,7 +349,7 @@ func TestClientAccounting(t *testing.T) {
 		defer server.Close()
 
 		client := NewClient(server.Addr(), WithSecret("testsecret"))
-		reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
 	})
@@ -360,7 +360,7 @@ func TestClientAccounting(t *testing.T) {
 		defer server.Close()
 
 		client := NewClient(server.Addr(), WithSecret("testsecret"))
-		reply, err := client.AccountingStop(context.Background(), "testuser", []string{"elapsed_time=60"})
+		reply, err := client.Accounting(context.Background(), AcctFlagStop, "testuser", []string{"elapsed_time=60"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
 	})
@@ -371,7 +371,7 @@ func TestClientAccounting(t *testing.T) {
 		defer server.Close()
 
 		client := NewClient(server.Addr(), WithSecret("testsecret"))
-		reply, err := client.AccountingWatchdog(context.Background(), "testuser", []string{"bytes_in=1024"})
+		reply, err := client.Accounting(context.Background(), AcctFlagWatchdog, "testuser", []string{"bytes_in=1024"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
 	})

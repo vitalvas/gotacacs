@@ -227,17 +227,17 @@ func TestIntegrationAccounting(t *testing.T) {
 		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
 
 		// Start
-		startReply, err := client.AccountingStart(context.Background(), "admin", []string{"task_id=12345", "service=shell"})
+		startReply, err := client.Accounting(context.Background(), AcctFlagStart, "admin", []string{"task_id=12345", "service=shell"})
 		require.NoError(t, err)
 		assert.True(t, startReply.IsSuccess())
 
 		// Watchdog
-		watchdogReply, err := client.AccountingWatchdog(context.Background(), "admin", []string{"task_id=12345", "bytes_in=1024"})
+		watchdogReply, err := client.Accounting(context.Background(), AcctFlagWatchdog, "admin", []string{"task_id=12345", "bytes_in=1024"})
 		require.NoError(t, err)
 		assert.True(t, watchdogReply.IsSuccess())
 
 		// Stop
-		stopReply, err := client.AccountingStop(context.Background(), "admin", []string{"task_id=12345", "elapsed_time=120"})
+		stopReply, err := client.Accounting(context.Background(), AcctFlagStop, "admin", []string{"task_id=12345", "elapsed_time=120"})
 		require.NoError(t, err)
 		assert.True(t, stopReply.IsSuccess())
 	})
@@ -309,7 +309,7 @@ func TestIntegrationSingleConnect(t *testing.T) {
 		assert.True(t, resp.IsPass())
 
 		// Accounting request
-		acctReply, err := client.AccountingStart(context.Background(), "admin", []string{"task_id=1"})
+		acctReply, err := client.Accounting(context.Background(), AcctFlagStart, "admin", []string{"task_id=1"})
 		require.NoError(t, err)
 		assert.True(t, acctReply.IsSuccess())
 	})
@@ -448,7 +448,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		assert.Contains(t, args, "priv-lvl=7")
 
 		// 3. Start accounting for the session
-		acctStartReply, err := client.AccountingStart(context.Background(), "user", []string{
+		acctStartReply, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{
 			"task_id=session123",
 			"service=shell",
 			"start_time=1234567890",
@@ -457,7 +457,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		require.True(t, acctStartReply.IsSuccess(), "Accounting start should succeed")
 
 		// 4. Send watchdog update
-		acctWatchdogReply, err := client.AccountingWatchdog(context.Background(), "user", []string{
+		acctWatchdogReply, err := client.Accounting(context.Background(), AcctFlagWatchdog, "user", []string{
 			"task_id=session123",
 			"bytes_in=2048",
 			"bytes_out=4096",
@@ -466,7 +466,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		require.True(t, acctWatchdogReply.IsSuccess(), "Accounting watchdog should succeed")
 
 		// 5. Stop accounting when session ends
-		acctStopReply, err := client.AccountingStop(context.Background(), "user", []string{
+		acctStopReply, err := client.Accounting(context.Background(), AcctFlagStop, "user", []string{
 			"task_id=session123",
 			"elapsed_time=3600",
 			"stop_time=1234571490",

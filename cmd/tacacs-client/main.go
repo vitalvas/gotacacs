@@ -157,11 +157,11 @@ func runAccounting(ctx context.Context, client *gotacacs.Client, user string, ar
 
 	switch acctType {
 	case "start":
-		reply, err = client.AccountingStart(ctx, user, args)
+		reply, err = client.Accounting(ctx, gotacacs.AcctFlagStart, user, args)
 	case "stop":
-		reply, err = client.AccountingStop(ctx, user, args)
+		reply, err = client.Accounting(ctx, gotacacs.AcctFlagStop, user, args)
 	case "watchdog":
-		reply, err = client.AccountingWatchdog(ctx, user, args)
+		reply, err = client.Accounting(ctx, gotacacs.AcctFlagWatchdog, user, args)
 	default:
 		log.Fatalf("Error: unknown accounting type %q. Use start, stop, or watchdog", acctType)
 	}

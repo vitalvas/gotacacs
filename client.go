@@ -234,8 +234,8 @@ func (c *Client) recvPacket() (*Header, []byte, error) {
 			return nil, nil, fmt.Errorf("failed to read body: %w", err)
 		}
 
-		// Deobfuscate body
-		body = Deobfuscate(header, c.secret, body)
+		// Obfuscate body
+		body = Obfuscate(header, c.secret, body)
 	}
 
 	return header, body, nil
@@ -712,21 +712,6 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	}
 
 	return reply, nil
-}
-
-// AccountingStart sends an accounting START record.
-func (c *Client) AccountingStart(ctx context.Context, username string, args []string) (*AcctReply, error) {
-	return c.Accounting(ctx, AcctFlagStart, username, args)
-}
-
-// AccountingStop sends an accounting STOP record.
-func (c *Client) AccountingStop(ctx context.Context, username string, args []string) (*AcctReply, error) {
-	return c.Accounting(ctx, AcctFlagStop, username, args)
-}
-
-// AccountingWatchdog sends an accounting WATCHDOG record.
-func (c *Client) AccountingWatchdog(ctx context.Context, username string, args []string) (*AcctReply, error) {
-	return c.Accounting(ctx, AcctFlagWatchdog, username, args)
 }
 
 // closeConnection closes the connection without locking.

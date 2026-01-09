@@ -488,9 +488,9 @@ func (s *Server) readPacket(conn Conn, secret []byte) (*Header, []byte, error) {
 		}
 	}
 
-	// Deobfuscate if needed
+	// Deobfuscate if needed (Obfuscate is symmetric)
 	if header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
-		body = Deobfuscate(header, secret, body)
+		body = Obfuscate(header, secret, body)
 	}
 
 	return header, body, nil

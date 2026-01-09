@@ -355,7 +355,7 @@ func TestServerAccounting(t *testing.T) {
 
 		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
 
-		reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
 	})
@@ -423,7 +423,7 @@ func TestServerNoHandler(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
-		reply, err := client.AccountingStart(context.Background(), "testuser", []string{})
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
 	})
@@ -518,7 +518,7 @@ func TestServerInvalidPacket(t *testing.T) {
 		respBody := make([]byte, respHeader.Length)
 		io.ReadFull(conn, respBody)
 
-		respBody = Deobfuscate(respHeader, secret, respBody)
+		respBody = Obfuscate(respHeader, secret, respBody)
 
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(respBody)
@@ -643,7 +643,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
-		reply, err := client.AccountingStart(context.Background(), "testuser", []string{})
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
 	})
@@ -753,7 +753,7 @@ func TestServerSessionState(t *testing.T) {
 					})))
 			},
 			func(client *Client) error {
-				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
 					assert.True(t, reply.IsSuccess())
 				}
@@ -771,7 +771,7 @@ func TestServerSessionState(t *testing.T) {
 					})))
 			},
 			func(client *Client) error {
-				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
 					assert.True(t, reply.IsError())
 				}
@@ -854,7 +854,7 @@ func TestServerUserDataPassing(t *testing.T) {
 					})))
 			},
 			func(client *Client) error {
-				reply, err := client.AccountingStart(context.Background(), "testuser", []string{"task_id=1"})
+				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
 					assert.True(t, reply.IsSuccess())
 				}

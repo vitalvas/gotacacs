@@ -526,7 +526,7 @@ func BenchmarkFullPacketFlow(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		data, _ := pkt.MarshalBinary()
 		obfuscated := Obfuscate(header, secret, data)
-		deobfuscated := Deobfuscate(header, secret, obfuscated)
+		deobfuscated := Obfuscate(header, secret, obfuscated)
 		result := &AuthenStart{}
 		_ = result.UnmarshalBinary(deobfuscated)
 	}
