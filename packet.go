@@ -163,3 +163,12 @@ func IsServerPacket(p Packet) bool {
 		return false
 	}
 }
+
+// isBadSecretError checks if a buffer size mismatch indicates bad secret.
+// When a packet is deobfuscated with the wrong secret, the length fields
+// become garbage, resulting in unreasonably large expected lengths.
+// If expected length is more than double the actual + 16 bytes overhead,
+// the length fields are likely corrupted from wrong secret deobfuscation.
+func isBadSecretError(actualLen, expectedLen int) bool {
+	return expectedLen > actualLen*2+16
+}

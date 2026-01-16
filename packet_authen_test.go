@@ -687,6 +687,108 @@ func BenchmarkAuthenContinueUnmarshalBinary(b *testing.B) {
 	}
 }
 
+func TestBadSecretDetection(t *testing.T) {
+	// Simulate what happens when a packet is deobfuscated with the wrong secret.
+	// The length fields become garbage, causing unreasonably large expected lengths.
+
+	t.Run("AuthenStart with garbage lengths", func(t *testing.T) {
+		// Create a small valid packet, then corrupt the length fields to simulate bad secret
+		data := []byte{
+			0x01, 0x01, 0x01, 0x01, // action, priv, authen_type, service
+			0xFF, 0xFF, 0xFF, 0xFF, // garbage lengths: user=255, port=255, rem_addr=255, data=255
+		}
+		// Total expected would be 8 + 255*4 = 1028 bytes, but we only have 8
+
+		p := &AuthenStart{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AuthenStart with normal truncation should not be bad secret", func(t *testing.T) {
+		// Normal truncation: expected length slightly larger than actual
+		data := []byte{
+			0x01, 0x01, 0x01, 0x01, // action, priv, authen_type, service
+			0x05, 0x00, 0x00, 0x00, // user_len=5, rest=0, so expected=13 but we have 8
+		}
+
+		p := &AuthenStart{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBufferTooShort), "expected ErrBufferTooShort for normal truncation, got: %v", err)
+		assert.False(t, errors.Is(err, ErrBadSecret), "should not be ErrBadSecret for normal truncation")
+	})
+
+	t.Run("AuthenReply with garbage lengths", func(t *testing.T) {
+		// status, flags, server_msg_len (2 bytes), data_len (2 bytes)
+		data := []byte{
+			0x01, 0x00, // status, flags
+			0xFF, 0xFF, // server_msg_len = 65535
+			0xFF, 0xFF, // data_len = 65535
+		}
+		// Total expected would be 6 + 65535 + 65535 = 131076 bytes
+
+		p := &AuthenReply{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AuthenContinue with garbage lengths", func(t *testing.T) {
+		// user_msg_len (2 bytes), data_len (2 bytes), flags (1 byte)
+		data := []byte{
+			0xFF, 0xFF, // user_msg_len = 65535
+			0xFF, 0xFF, // data_len = 65535
+			0x00, // flags
+		}
+		// Total expected would be 5 + 65535 + 65535 = 131075 bytes
+
+		p := &AuthenContinue{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("bad secret with real obfuscation mismatch", func(t *testing.T) {
+		// Create a valid AuthenStart packet
+		original := &AuthenStart{
+			Action:     AuthenActionLogin,
+			PrivLevel:  1,
+			AuthenType: AuthenTypePAP,
+			Service:    AuthenServiceLogin,
+			User:       []byte("testuser"),
+			Data:       []byte("password"),
+		}
+		plaintext, err := original.MarshalBinary()
+		require.NoError(t, err)
+
+		// Create header for obfuscation
+		header := &Header{
+			Version:   0xc0,
+			Type:      PacketTypeAuthen,
+			SeqNo:     1,
+			SessionID: 12345,
+			Length:    uint32(len(plaintext)),
+		}
+
+		// Obfuscate with correct secret
+		correctSecret := []byte("correct-secret")
+		obfuscated := Obfuscate(header, correctSecret, plaintext)
+
+		// Try to deobfuscate with wrong secret
+		wrongSecret := []byte("wrong-secret")
+		garbage := Obfuscate(header, wrongSecret, obfuscated)
+
+		// The garbage data should trigger bad secret detection
+		p := &AuthenStart{}
+		err = p.UnmarshalBinary(garbage)
+		// Note: This may or may not trigger ErrBadSecret depending on what
+		// garbage values end up in the length fields. The test verifies
+		// that parsing fails (either ErrBadSecret or ErrBufferTooShort).
+		assert.Error(t, err, "parsing garbage data should fail")
+	})
+}
+
 func FuzzAuthenStartUnmarshalBinary(f *testing.F) {
 	validPkt := &AuthenStart{
 		Action:     AuthenActionLogin,

@@ -83,6 +83,9 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 
 	expectedLen := 8 + userLen + portLen + remAddrLen + dataLen
 	if len(data) < expectedLen {
+		if isBadSecretError(len(data), expectedLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
+		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
 
@@ -176,6 +179,9 @@ func (p *AuthenReply) UnmarshalBinary(data []byte) error {
 
 	expectedLen := 6 + serverMsgLen + dataLen
 	if len(data) < expectedLen {
+		if isBadSecretError(len(data), expectedLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
+		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
 
@@ -277,6 +283,9 @@ func (p *AuthenContinue) UnmarshalBinary(data []byte) error {
 
 	expectedLen := 5 + userMsgLen + dataLen
 	if len(data) < expectedLen {
+		if isBadSecretError(len(data), expectedLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
+		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
 

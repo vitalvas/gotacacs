@@ -141,6 +141,9 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 	// Calculate minimum length needed
 	minLen := 9 + argCount + userLen + portLen + remAddrLen
 	if len(data) < minLen {
+		if isBadSecretError(len(data), minLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, minLen, len(data))
+		}
 		return fmt.Errorf("%w: need at least %d bytes for header and lengths, got %d", ErrBufferTooShort, minLen, len(data))
 	}
 
@@ -158,6 +161,9 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 	// Verify we have enough data for all fields
 	expectedLen := offset + userLen + portLen + remAddrLen + totalArgsLen
 	if len(data) < expectedLen {
+		if isBadSecretError(len(data), expectedLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
+		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
 
@@ -257,6 +263,9 @@ func (p *AcctReply) UnmarshalBinary(data []byte) error {
 
 	expectedLen := 5 + serverMsgLen + dataLen
 	if len(data) < expectedLen {
+		if isBadSecretError(len(data), expectedLen) {
+			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
+		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
 

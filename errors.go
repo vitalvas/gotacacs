@@ -54,4 +54,10 @@ var (
 	// ErrSequenceOverflow indicates the sequence number would overflow.
 	// This happens after 255 packets in a session.
 	ErrSequenceOverflow = errors.New("sequence number overflow")
+
+	// ErrBadSecret indicates the shared secret may be incorrect.
+	// This error is returned when packet parsing fails in a way that
+	// suggests the body was deobfuscated with the wrong secret,
+	// resulting in garbage length fields.
+	ErrBadSecret = errors.New("bad secret")
 )

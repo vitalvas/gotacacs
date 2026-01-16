@@ -465,6 +465,51 @@ func TestAcctRequestEmptyArgs(t *testing.T) {
 	})
 }
 
+func TestAcctBadSecretDetection(t *testing.T) {
+	t.Run("AcctRequest with garbage lengths", func(t *testing.T) {
+		// 9-byte header with garbage length fields
+		data := []byte{
+			0x02, 0x01, 0x01, 0x01, 0x01, // flags, authen_method, priv, authen_type, service
+			0xFF, 0xFF, 0xFF, 0xFF, // garbage: user=255, port=255, rem_addr=255, arg_count=255
+		}
+		// minLen = 9 + 255 + 255 + 255 + 255 = 1029, but we only have 9
+
+		p := &AcctRequest{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AcctRequest normal truncation should not be bad secret", func(t *testing.T) {
+		data := []byte{
+			0x02, 0x01, 0x01, 0x01, 0x01, // flags, authen_method, priv, authen_type, service
+			0x05, 0x00, 0x00, 0x00, // user_len=5, rest=0
+		}
+		// minLen = 9 + 5 = 14, but we have 9 - close enough not to trigger bad secret
+
+		p := &AcctRequest{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBufferTooShort), "expected ErrBufferTooShort, got: %v", err)
+		assert.False(t, errors.Is(err, ErrBadSecret))
+	})
+
+	t.Run("AcctReply with garbage lengths", func(t *testing.T) {
+		// 5-byte header with garbage length fields
+		data := []byte{
+			0xFF, 0xFF, // server_msg_len = 65535
+			0xFF, 0xFF, // data_len = 65535
+			0x01, // status
+		}
+		// expectedLen = 5 + 65535 + 65535 = 131075, but we only have 5
+
+		p := &AcctReply{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+}
+
 func BenchmarkAcctRequestMarshalBinary(b *testing.B) {
 	pkt := &AcctRequest{
 		Flags:        AcctFlagStart,

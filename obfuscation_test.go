@@ -382,6 +382,185 @@ func TestObfuscateEdgeCases(t *testing.T) {
 	})
 }
 
+// Test vectors from https://github.com/facebookincubator/tacquito/blob/main/crypt_test.go
+// These provide interoperability validation with another TACACS+ implementation.
+
+// getTacquitoEncryptedBytes returns an encrypted TACACS+ packet's bytes
+// (52 bytes total: 12-byte header + 40-byte body), encrypted with secret "fooman"
+func getTacquitoEncryptedBytes() []byte {
+	return []byte{
+		0xc1, 0x01, 0x01, 0x00, 0x00, 0x00, 0x30, 0x39, 0x00, 0x00, 0x00, 0x2c, // header
+		0x9c, 0xed, 0x73, 0xaa, 0x3d, 0x6d, 0x2f, 0x1f, 0xef, 0x62, 0x98, 0x73, // body
+		0xf0, 0xac, 0x2f, 0x11, 0x8a, 0xe2, 0x89, 0x8a, 0xcb, 0x50, 0x72, 0xb2,
+		0x6d, 0xd2, 0xec, 0xab, 0xe1, 0x4e, 0x22, 0x64, 0x4c, 0x7c, 0xb2, 0x0e,
+		0x43, 0x0e, 0x33, 0x92, 0x85, 0x47, 0xca, 0xfc,
+	}
+}
+
+// getTacquitoDecryptedBytes returns the decrypted TACACS+ body (44 bytes, no header)
+// This is an AuthenStart with: action=LOGIN, priv=USER, type=ASCII, service=LOGIN
+// user="admin", port="command-api", rem_addr="2001:4860:4860::8888"
+func getTacquitoDecryptedBytes() []byte {
+	return []byte{
+		0x01, 0x01, 0x01, 0x01, // action, priv_lvl, authen_type, service
+		0x05, 0x0b, 0x14, 0x00, // user_len=5, port_len=11, rem_addr_len=20, data_len=0
+		0x61, 0x64, 0x6d, 0x69, 0x6e, // "admin"
+		0x63, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x2d, 0x61, 0x70, 0x69, // "command-api"
+		0x32, 0x30, 0x30, 0x31, 0x3a, 0x34, 0x38, 0x36, 0x30, 0x3a, // "2001:4860:4860::8888"
+		0x34, 0x38, 0x36, 0x30, 0x3a, 0x3a, 0x38, 0x38, 0x38, 0x38,
+	}
+}
+
+func TestTacquitoInteroperability(t *testing.T) {
+	// Test vectors from tacquito project for interoperability validation
+	encrypted := getTacquitoEncryptedBytes()
+	decrypted := getTacquitoDecryptedBytes()
+	secret := []byte("fooman")
+
+	// Parse the header from encrypted bytes
+	header := &Header{}
+	err := header.UnmarshalBinary(encrypted[:HeaderLength])
+	require.NoError(t, err)
+
+	// Verify header values
+	assert.Equal(t, uint8(0xc1), header.Version)
+	assert.Equal(t, uint8(PacketTypeAuthen), header.Type)
+	assert.Equal(t, uint8(1), header.SeqNo)
+	assert.Equal(t, uint8(0), header.Flags)
+	assert.Equal(t, uint32(12345), header.SessionID) // 0x3039 = 12345
+	assert.Equal(t, uint32(44), header.Length)       // 0x2c = 44
+
+	t.Run("decrypt tacquito encrypted packet", func(t *testing.T) {
+		encryptedBody := encrypted[HeaderLength:]
+		result := Obfuscate(header, secret, encryptedBody)
+		assert.Equal(t, decrypted, result, "decrypted body should match tacquito test vector")
+	})
+
+	t.Run("encrypt to match tacquito ciphertext", func(t *testing.T) {
+		result := Obfuscate(header, secret, decrypted)
+		expectedCiphertext := encrypted[HeaderLength:]
+		assert.Equal(t, expectedCiphertext, result, "encrypted body should match tacquito ciphertext")
+	})
+
+	t.Run("roundtrip with tacquito data", func(t *testing.T) {
+		encryptedBody := encrypted[HeaderLength:]
+		decryptedResult := Obfuscate(header, secret, encryptedBody)
+		reencrypted := Obfuscate(header, secret, decryptedResult)
+		assert.Equal(t, encryptedBody, reencrypted, "re-encrypted should match original ciphertext")
+	})
+
+	t.Run("parse decrypted as AuthenStart", func(t *testing.T) {
+		encryptedBody := encrypted[HeaderLength:]
+		decryptedBody := Obfuscate(header, secret, encryptedBody)
+
+		start := &AuthenStart{}
+		err := start.UnmarshalBinary(decryptedBody)
+		require.NoError(t, err)
+
+		assert.Equal(t, uint8(AuthenActionLogin), start.Action)
+		assert.Equal(t, uint8(1), start.PrivLevel) // PrivLvlUser
+		assert.Equal(t, uint8(AuthenTypeASCII), start.AuthenType)
+		assert.Equal(t, uint8(AuthenServiceLogin), start.Service)
+		assert.Equal(t, "admin", string(start.User))
+		assert.Equal(t, "command-api", string(start.Port))
+		assert.Equal(t, "2001:4860:4860::8888", string(start.RemoteAddr))
+		assert.Nil(t, start.Data)
+	})
+
+	t.Run("create matching packet from scratch", func(t *testing.T) {
+		// Create the same AuthenStart packet and verify it produces the same output
+		start := &AuthenStart{
+			Action:     AuthenActionLogin,
+			PrivLevel:  1, // PrivLvlUser
+			AuthenType: AuthenTypeASCII,
+			Service:    AuthenServiceLogin,
+			User:       []byte("admin"),
+			Port:       []byte("command-api"),
+			RemoteAddr: []byte("2001:4860:4860::8888"),
+		}
+
+		body, err := start.MarshalBinary()
+		require.NoError(t, err)
+		assert.Equal(t, decrypted, body, "marshaled body should match tacquito decrypted bytes")
+
+		// Encrypt with the same header and secret
+		ciphertext := Obfuscate(header, secret, body)
+		expectedCiphertext := encrypted[HeaderLength:]
+		assert.Equal(t, expectedCiphertext, ciphertext, "ciphertext should match tacquito encrypted bytes")
+	})
+}
+
+func TestTacquitoSecretMismatch(t *testing.T) {
+	// Based on tacquito's TestEncryptDecryptSecretMismatch
+	// This tests that wrong secrets produce malformed packets
+
+	body := &AuthenReply{
+		Status:    AuthenStatusGetUser,
+		ServerMsg: []byte("\nUser Access Verification\n\nUsername:"),
+	}
+	plaintext, err := body.MarshalBinary()
+	require.NoError(t, err)
+
+	header := &Header{
+		Version:   0xc1,
+		Type:      PacketTypeAuthen,
+		SeqNo:     2,
+		SessionID: 12345,
+		Length:    uint32(len(plaintext)),
+	}
+
+	// Encrypt with correct secret
+	correctSecret := []byte("chilled cow")
+	encrypted := Obfuscate(header, correctSecret, plaintext)
+
+	// Decrypt with wrong secret
+	wrongSecret := []byte("imma bad secret")
+	garbage := Obfuscate(header, wrongSecret, encrypted)
+
+	// Try to unmarshal the garbage - should fail or produce wrong data
+	decrypted := &AuthenReply{}
+	err = decrypted.UnmarshalBinary(garbage)
+
+	// The packet might parse but will have wrong values
+	if err == nil {
+		// If it parsed, the values should be wrong
+		assert.NotEqual(t, body.Status, decrypted.Status,
+			"wrong secret should produce different status")
+	}
+	// If it didn't parse, that's also correct behavior (bad secret detected)
+}
+
+func TestTacquitoUnencryptedFlag(t *testing.T) {
+	// Based on tacquito's TestPacketEncryptDecryptUnencryptFlagSet
+	// This tests that UnencryptedFlag prevents obfuscation
+
+	body := &AuthenReply{
+		Status:    AuthenStatusGetUser,
+		ServerMsg: []byte("\nUser Access Verification\n\nUsername:"),
+	}
+	plaintext, err := body.MarshalBinary()
+	require.NoError(t, err)
+
+	header := &Header{
+		Version:   0xc1,
+		Type:      PacketTypeAuthen,
+		SeqNo:     2,
+		Flags:     FlagUnencrypted,
+		SessionID: 12345,
+		Length:    uint32(len(plaintext)),
+	}
+
+	secret := []byte("chilled cow")
+
+	// With UnencryptedFlag set, body should remain unchanged
+	result := Obfuscate(header, secret, plaintext)
+	assert.Equal(t, plaintext, result, "UnencryptedFlag should prevent obfuscation")
+
+	// Double-apply should still return original
+	result2 := Obfuscate(header, secret, result)
+	assert.Equal(t, plaintext, result2, "UnencryptedFlag should prevent obfuscation on second call")
+}
+
 func byteSizeName(size int) string {
 	switch {
 	case size >= 1024:

@@ -537,6 +537,52 @@ func TestAuthorResponseEmptyArgs(t *testing.T) {
 	})
 }
 
+func TestAuthorBadSecretDetection(t *testing.T) {
+	t.Run("AuthorRequest with garbage lengths", func(t *testing.T) {
+		// 8-byte header with garbage length fields
+		data := []byte{
+			0x01, 0x01, 0x01, 0x01, // authen_method, priv, authen_type, service
+			0xFF, 0xFF, 0xFF, 0xFF, // garbage: user=255, port=255, rem_addr=255, arg_count=255
+		}
+		// minLen = 8 + 255 + 255 + 255 + 255 = 1028, but we only have 8
+
+		p := &AuthorRequest{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AuthorRequest normal truncation should not be bad secret", func(t *testing.T) {
+		data := []byte{
+			0x01, 0x01, 0x01, 0x01, // authen_method, priv, authen_type, service
+			0x05, 0x00, 0x00, 0x00, // user_len=5, rest=0
+		}
+		// minLen = 8 + 5 = 13, but we have 8 - close enough not to trigger bad secret
+
+		p := &AuthorRequest{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBufferTooShort), "expected ErrBufferTooShort, got: %v", err)
+		assert.False(t, errors.Is(err, ErrBadSecret))
+	})
+
+	t.Run("AuthorResponse with garbage lengths", func(t *testing.T) {
+		// 6-byte header with garbage length fields
+		data := []byte{
+			0x01,       // status
+			0xFF,       // arg_count = 255
+			0xFF, 0xFF, // server_msg_len = 65535
+			0xFF, 0xFF, // data_len = 65535
+		}
+		// minLen = 6 + 255 = 261, but we only have 6
+
+		p := &AuthorResponse{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+}
+
 func BenchmarkAuthorRequestMarshalBinary(b *testing.B) {
 	scenarios := []struct {
 		name string

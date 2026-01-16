@@ -586,6 +586,9 @@ func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
 func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	start := &AuthenStart{}
 	if err := start.UnmarshalBinary(body); err != nil {
+		if errors.Is(err, ErrBadSecret) {
+			return s.authenErrorResponse("bad secret")
+		}
 		return s.authenErrorResponse("invalid START packet")
 	}
 	if s.authenHandler == nil {
@@ -607,6 +610,9 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	cont := &AuthenContinue{}
 	if err := cont.UnmarshalBinary(body); err != nil {
+		if errors.Is(err, ErrBadSecret) {
+			return s.authenErrorResponse("bad secret")
+		}
 		return s.authenErrorResponse("invalid CONTINUE packet")
 	}
 	if s.authenHandler == nil {
@@ -634,7 +640,11 @@ func (s *Server) authorErrorResponse(msg string) ([]byte, uint8) {
 func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
 	request := &AuthorRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
-		respBody, respType := s.authorErrorResponse("invalid authorization request")
+		msg := "invalid authorization request"
+		if errors.Is(err, ErrBadSecret) {
+			msg = "bad secret"
+		}
+		respBody, respType := s.authorErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
 	if s.authorHandler == nil {
@@ -670,7 +680,11 @@ func (s *Server) acctErrorResponse(msg string) ([]byte, uint8) {
 func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
 	request := &AcctRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
-		respBody, respType := s.acctErrorResponse("invalid accounting request")
+		msg := "invalid accounting request"
+		if errors.Is(err, ErrBadSecret) {
+			msg = "bad secret"
+		}
+		respBody, respType := s.acctErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
 	if s.acctHandler == nil {
