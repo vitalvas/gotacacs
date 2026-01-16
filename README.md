@@ -12,7 +12,7 @@ This package provides both client and server SDK interfaces for Authentication, 
 - TCP and TLS transport support
 - Body obfuscation (MD5-based pseudo-pad)
 - Single-connect mode for connection reuse
-- Per-client secret provider support
+- Per-client secret provider with custom user data
 
 ## Installation
 
@@ -20,177 +20,117 @@ This package provides both client and server SDK interfaces for Authentication, 
 go get github.com/vitalvas/gotacacs
 ```
 
-## Usage
+## Quick Start
 
 ### Client
 
 ```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "log"
-    "time"
-
-    "github.com/vitalvas/gotacacs"
+client := gotacacs.NewClient(
+    gotacacs.WithAddress("tacacs.example.com:49"),
+    gotacacs.WithSecret("sharedsecret"),
 )
 
-func main() {
-    client := gotacacs.NewClient("tacacs.example.com:49",
-        gotacacs.WithSecret("sharedsecret"),
-        gotacacs.WithTimeout(30*time.Second),
-    )
+// Authentication
+reply, err := client.Authenticate(ctx, "username", "password")
+if reply.IsPass() {
+    fmt.Println("Authentication successful")
+}
 
-    ctx := context.Background()
+// Authorization
+resp, err := client.Authorize(ctx, "username", []string{"service=shell", "cmd=show"})
+if resp.IsPass() {
+    fmt.Println("Authorization granted")
+}
 
-    // Authentication
-    reply, err := client.Authenticate(ctx, "username", "password")
-    if err != nil {
-        log.Fatal(err)
-    }
-    if reply.IsPass() {
-        fmt.Println("Authentication successful")
-    }
-
-    // Authorization
-    resp, err := client.Authorize(ctx, "username", []string{"service=shell", "cmd=show"})
-    if err != nil {
-        log.Fatal(err)
-    }
-    if resp.IsPass() {
-        fmt.Println("Authorization granted")
-        for _, arg := range resp.GetArgs() {
-            fmt.Printf("  %s\n", arg)
-        }
-    }
-
-    // Accounting
-    acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{"task_id=123"})
-    if err != nil {
-        log.Fatal(err)
-    }
-    if acctReply.IsSuccess() {
-        fmt.Println("Accounting recorded")
-    }
+// Accounting
+acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{"task_id=123"})
+if acctReply.IsSuccess() {
+    fmt.Println("Accounting recorded")
 }
 ```
 
 ### Server
 
 ```go
-package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/vitalvas/gotacacs"
-)
-
-type handler struct {
-    users map[string]string
+ln, err := gotacacs.ListenTCP(":49")
+if err != nil {
+    log.Fatal(err)
 }
 
-func (h *handler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
-    user := string(req.Start.User)
-    password := string(req.Start.Data)
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(ln),
+    gotacacs.WithServerSecret("sharedsecret"),
+    gotacacs.WithHandler(&myHandler{}),
+)
 
-    if expectedPass, ok := h.users[user]; ok && expectedPass == password {
+if err := server.Serve(); err != nil {
+    log.Fatal(err)
+}
+```
+
+Implement the handler interface:
+
+```go
+type myHandler struct{}
+
+func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    if string(req.Start.User) == "admin" && string(req.Start.Data) == "secret" {
         return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
     }
     return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
 }
 
-func (h *handler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
+func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
     return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
 }
 
-func (h *handler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
+func (h *myHandler) HandleAuthorRequest(_ context.Context, _ *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
     return &gotacacs.AuthorResponse{
         Status: gotacacs.AuthorStatusPassAdd,
         Args:   [][]byte{[]byte("priv-lvl=15")},
     }
 }
 
-func (h *handler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
+func (h *myHandler) HandleAcctRequest(_ context.Context, _ *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
     return &gotacacs.AcctReply{Status: gotacacs.AcctStatusSuccess}
 }
-
-func main() {
-    ln, err := gotacacs.ListenTCP(":49")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    server := gotacacs.NewServer(
-        gotacacs.WithServerListener(ln),
-        gotacacs.WithServerSecret("sharedsecret"),
-        gotacacs.WithHandler(&handler{
-            users: map[string]string{
-                "admin": "admin123",
-                "user":  "user123",
-            },
-        }),
-    )
-
-    log.Println("Starting TACACS+ server on :49")
-    if err := server.Serve(); err != nil {
-        log.Fatal(err)
-    }
-}
 ```
 
-### TLS Support
+### Per-Client Secret Provider
 
 ```go
-// Client with TLS
-tlsConfig := &tls.Config{
-    RootCAs: certPool,
-}
-client := gotacacs.NewClient("tacacs.example.com:49",
-    gotacacs.WithSecret("sharedsecret"),
-    gotacacs.WithTLSConfig(tlsConfig),
-)
+secretProvider := gotacacs.SecretProviderFunc(func(ctx context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+    return gotacacs.SecretResponse{
+        Secret: []byte("sharedsecret"),
+        UserData: map[string]string{
+            "client_ip": req.RemoteAddr.String(),
+            "local_ip":  req.LocalAddr.String(),
+        },
+    }
+})
 
-// Server with TLS
-tlsConfig, err := gotacacs.NewTLSConfig("cert.pem", "key.pem")
-if err != nil {
-    log.Fatal(err)
-}
-ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(ln),
+    gotacacs.WithSecretProvider(secretProvider),
+    gotacacs.WithHandler(&myHandler{}),
+)
 ```
 
-### Single-Connect Mode
+## Documentation
 
-```go
-client := gotacacs.NewClient("tacacs.example.com:49",
-    gotacacs.WithSecret("sharedsecret"),
-    gotacacs.WithSingleConnect(true),
-)
-defer client.Close()
+- [Client Documentation](docs/client.md) - Client options, authentication, authorization, accounting, TLS, error handling
+- [Server Documentation](docs/server.md) - Server options, handlers, secret providers, session management, TLS
 
-// Multiple requests reuse the same connection
-for i := 0; i < 10; i++ {
-    reply, err := client.Authenticate(ctx, "user", "pass")
-    // ...
-}
-```
+## Examples
 
-## Example Binaries
-
-The package includes example client and server binaries in `cmd/`:
-
-### tacacs-client
+The package includes example binaries in `cmd/`:
 
 ```bash
-go run ./cmd/tacacs-client -server localhost:49 -secret sharedsecret -user admin -pass admin123 -mode authenticate
-```
+# Run the server
+go run ./cmd/tacacs-server
 
-### tacacs-server
-
-```bash
-go run ./cmd/tacacs-server -listen :49 -secret sharedsecret -users admin:admin123,user:user123 -verbose
+# Run the client
+go run ./cmd/tacacs-client
 ```
 
 ## Protocol Reference

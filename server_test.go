@@ -11,50 +11,124 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSecretProvider(t *testing.T) {
-	t.Run("static secret provider", func(t *testing.T) {
-		secret := []byte("testsecret")
-		provider := StaticSecretProvider(secret)
+// sendInvalidPacketAndGetResponse sends an invalid packet to the server and returns the response body
+func sendInvalidPacketAndGetResponse(t *testing.T, addr string, packetType uint8, secret []byte) []byte {
+	t.Helper()
 
-		addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
-		result, userData := provider.GetSecret(addr)
-		assert.Equal(t, secret, result)
-		assert.Nil(t, userData)
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	header := &Header{
+		Version:   0xc0,
+		Type:      packetType,
+		SeqNo:     1,
+		SessionID: 12345,
+		Length:    1,
+	}
+
+	invalidBody := []byte{0xFF}
+	obfuscatedBody := Obfuscate(header, secret, invalidBody)
+	headerData, _ := header.MarshalBinary()
+
+	conn.Write(headerData)
+	conn.Write(obfuscatedBody)
+
+	respHeaderBuf := make([]byte, HeaderLength)
+	io.ReadFull(conn, respHeaderBuf)
+
+	respHeader := &Header{}
+	respHeader.UnmarshalBinary(respHeaderBuf)
+
+	respBody := make([]byte, respHeader.Length)
+	io.ReadFull(conn, respBody)
+	return Obfuscate(respHeader, secret, respBody)
+}
+
+func TestSecretProvider(t *testing.T) {
+	t.Run("static secret provider func", func(t *testing.T) {
+		secret := []byte("testsecret")
+		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: secret}
+		})
+
+		req := SecretRequest{
+			RemoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345},
+			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
+		}
+		resp := provider.GetSecret(context.Background(), req)
+		assert.Equal(t, secret, resp.Secret)
+		assert.Nil(t, resp.UserData)
 	})
 
 	t.Run("secret provider func", func(t *testing.T) {
-		provider := SecretProviderFunc(func(addr net.Addr) ([]byte, map[string]string) {
-			if addr.String() == "127.0.0.1:12345" {
-				return []byte("secret1"), map[string]string{"client": "client1"}
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			if req.RemoteAddr.String() == "127.0.0.1:12345" {
+				return SecretResponse{
+					Secret:   []byte("secret1"),
+					UserData: map[string]string{"client": "client1"},
+				}
 			}
-			return []byte("default"), nil
+			return SecretResponse{Secret: []byte("default")}
 		})
 
-		addr1, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
-		addr2, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:54321")
+		req1 := SecretRequest{
+			RemoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345},
+			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
+		}
+		req2 := SecretRequest{
+			RemoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
+			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
+		}
 
-		secret1, userData1 := provider.GetSecret(addr1)
-		assert.Equal(t, []byte("secret1"), secret1)
-		assert.Equal(t, map[string]string{"client": "client1"}, userData1)
+		resp1 := provider.GetSecret(context.Background(), req1)
+		assert.Equal(t, []byte("secret1"), resp1.Secret)
+		assert.Equal(t, map[string]string{"client": "client1"}, resp1.UserData)
 
-		secret2, userData2 := provider.GetSecret(addr2)
-		assert.Equal(t, []byte("default"), secret2)
-		assert.Nil(t, userData2)
+		resp2 := provider.GetSecret(context.Background(), req2)
+		assert.Equal(t, []byte("default"), resp2.Secret)
+		assert.Nil(t, resp2.UserData)
 	})
 
 	t.Run("secret provider with user data", func(t *testing.T) {
-		provider := SecretProviderFunc(func(_ net.Addr) ([]byte, map[string]string) {
-			return []byte("secret"), map[string]string{
-				"client_name": "router1",
-				"client_type": "network",
+		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{
+				Secret: []byte("secret"),
+				UserData: map[string]string{
+					"client_name": "router1",
+					"client_type": "network",
+				},
 			}
 		})
 
-		addr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:12345")
-		secret, userData := provider.GetSecret(addr)
-		assert.Equal(t, []byte("secret"), secret)
-		assert.Equal(t, "router1", userData["client_name"])
-		assert.Equal(t, "network", userData["client_type"])
+		req := SecretRequest{
+			RemoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345},
+			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
+		}
+		resp := provider.GetSecret(context.Background(), req)
+		assert.Equal(t, []byte("secret"), resp.Secret)
+		assert.Equal(t, "router1", resp.UserData["client_name"])
+		assert.Equal(t, "network", resp.UserData["client_type"])
+	})
+
+	t.Run("secret provider with local addr", func(t *testing.T) {
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			return SecretResponse{
+				Secret: []byte("secret"),
+				UserData: map[string]string{
+					"remote": req.RemoteAddr.String(),
+					"local":  req.LocalAddr.String(),
+				},
+			}
+		})
+
+		req := SecretRequest{
+			RemoteAddr: &net.TCPAddr{IP: net.ParseIP("192.168.1.100"), Port: 12345},
+			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 49},
+		}
+		resp := provider.GetSecret(context.Background(), req)
+		assert.Equal(t, "192.168.1.100:12345", resp.UserData["remote"])
+		assert.Equal(t, "10.0.0.1:49", resp.UserData["local"])
 	})
 }
 
@@ -80,7 +154,9 @@ func TestServerOptions(t *testing.T) {
 	})
 
 	t.Run("with secret provider", func(t *testing.T) {
-		provider := StaticSecretProvider([]byte("test"))
+		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: []byte("test")}
+		})
 		server := NewServer(WithSecretProvider(provider))
 		assert.NotNil(t, server.secretProvider)
 	})
@@ -107,6 +183,36 @@ func TestServerOptions(t *testing.T) {
 
 		server := NewServer(WithServerListener(ln))
 		assert.Equal(t, ln, server.listener)
+	})
+
+	t.Run("with max body length", func(t *testing.T) {
+		server := NewServer(WithServerMaxBodyLength(2048))
+		assert.Equal(t, uint32(2048), server.maxBodyLength)
+	})
+
+	t.Run("with nil session store keeps default", func(t *testing.T) {
+		server := NewServer(WithServerSessionStore(nil))
+		assert.NotNil(t, server.sessionStore)
+	})
+
+	t.Run("with secret bytes used in connection", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecretBytes([]byte("testsecret")),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
 	})
 }
 
@@ -276,7 +382,7 @@ func TestServerAuthentication(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 		require.NoError(t, err)
 		assert.True(t, reply.IsPass())
@@ -300,7 +406,7 @@ func TestServerAuthentication(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "wronguser", "testpass")
 		require.NoError(t, err)
 		assert.True(t, reply.IsFail())
@@ -326,7 +432,7 @@ func TestServerAuthorization(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
@@ -353,7 +459,7 @@ func TestServerAccounting(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 		require.NoError(t, err)
@@ -378,7 +484,7 @@ func TestServerNoHandler(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
@@ -400,7 +506,7 @@ func TestServerNoHandler(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
@@ -422,7 +528,7 @@ func TestServerNoHandler(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
@@ -448,7 +554,7 @@ func TestServerSingleConnect(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(),
+		client := NewClient(WithAddress(ln.Addr().String()),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
 		)
@@ -564,7 +670,33 @@ func TestIsNetClosedError(t *testing.T) {
 	t.Run("non-net error", func(t *testing.T) {
 		assert.False(t, isNetClosedError(io.EOF))
 	})
+
+	t.Run("net.OpError with closed connection", func(t *testing.T) {
+		err := &net.OpError{
+			Op:  "read",
+			Net: "tcp",
+			Err: &closedError{},
+		}
+		assert.True(t, isNetClosedError(err))
+	})
+
+	t.Run("net.OpError with different error", func(t *testing.T) {
+		err := &net.OpError{
+			Op:  "read",
+			Net: "tcp",
+			Err: &differentError{},
+		}
+		assert.False(t, isNetClosedError(err))
+	})
 }
+
+type closedError struct{}
+
+func (e *closedError) Error() string { return "use of closed network connection" }
+
+type differentError struct{}
+
+func (e *differentError) Error() string { return "some other error" }
 
 func TestServerHandlerNilReply(t *testing.T) {
 	t.Run("handler returns nil for authentication", func(t *testing.T) {
@@ -588,7 +720,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
@@ -615,7 +747,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
@@ -642,7 +774,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
 		require.NoError(t, err)
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
@@ -663,7 +795,7 @@ func TestServerSessionState(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		require.NoError(t, runClient(client))
 
 		time.Sleep(10 * time.Millisecond)
@@ -786,8 +918,8 @@ func TestServerUserDataPassing(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
 		require.NoError(t, err)
 
-		secretProvider := SecretProviderFunc(func(_ net.Addr) ([]byte, map[string]string) {
-			return []byte("testsecret"), expectedUserData
+		secretProvider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: []byte("testsecret"), UserData: expectedUserData}
 		})
 
 		server := setupServer(ln, secretProvider)
@@ -795,7 +927,7 @@ func TestServerUserDataPassing(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		require.NoError(t, runClient(client))
 		assert.Equal(t, expectedUserData, getReceived())
 	}
@@ -878,10 +1010,563 @@ func TestServerUserDataPassing(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 		require.NoError(t, err)
 		assert.True(t, reply.IsPass())
 		assert.Nil(t, receivedUserData)
+	})
+}
+
+func TestServerMultiStepAuthentication(t *testing.T) {
+	t.Run("authentication continue with GETPASS", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		step := 0
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, req *AuthenRequest) *AuthenReply {
+				step++
+				if len(req.Start.Data) == 0 {
+					return &AuthenReply{
+						Status:    AuthenStatusGetPass,
+						ServerMsg: []byte("Password: "),
+						Flags:     AuthenReplyFlagNoEcho,
+					}
+				}
+				if string(req.Start.Data) == "secret" {
+					return &AuthenReply{Status: AuthenStatusPass}
+				}
+				return &AuthenReply{Status: AuthenStatusFail}
+			},
+			onContinue: func(_ context.Context, req *AuthenContinueRequest) *AuthenReply {
+				step++
+				if string(req.Continue.UserMsg) == "secret" {
+					return &AuthenReply{Status: AuthenStatusPass}
+				}
+				return &AuthenReply{Status: AuthenStatusFail}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(prompt string, noEcho bool) (string, error) {
+			assert.Contains(t, prompt, "Password")
+			assert.True(t, noEcho)
+			return "secret", nil
+		})
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+		assert.Equal(t, 2, step)
+	})
+
+	t.Run("authentication continue with GETDATA", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+				return &AuthenReply{
+					Status:    AuthenStatusGetData,
+					ServerMsg: []byte("Enter OTP: "),
+				}
+			},
+			onContinue: func(_ context.Context, req *AuthenContinueRequest) *AuthenReply {
+				if string(req.Continue.UserMsg) == "123456" {
+					return &AuthenReply{Status: AuthenStatusPass}
+				}
+				return &AuthenReply{Status: AuthenStatusFail}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(prompt string, noEcho bool) (string, error) {
+			assert.Contains(t, prompt, "OTP")
+			assert.False(t, noEcho)
+			return "123456", nil
+		})
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+
+	t.Run("authentication continue with GETUSER", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		step := 0
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, req *AuthenRequest) *AuthenReply {
+				step++
+				if len(req.Start.User) == 0 {
+					return &AuthenReply{
+						Status:    AuthenStatusGetUser,
+						ServerMsg: []byte("Username: "),
+					}
+				}
+				return &AuthenReply{
+					Status:    AuthenStatusGetPass,
+					ServerMsg: []byte("Password: "),
+					Flags:     AuthenReplyFlagNoEcho,
+				}
+			},
+			onContinue: func(_ context.Context, req *AuthenContinueRequest) *AuthenReply {
+				step++
+				if step == 2 {
+					// Got username, ask for password
+					return &AuthenReply{
+						Status:    AuthenStatusGetPass,
+						ServerMsg: []byte("Password: "),
+						Flags:     AuthenReplyFlagNoEcho,
+					}
+				}
+				// Got password
+				if string(req.Continue.UserMsg) == "secret" {
+					return &AuthenReply{Status: AuthenStatusPass}
+				}
+				return &AuthenReply{Status: AuthenStatusFail}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		promptCount := 0
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "", func(_ string, _ bool) (string, error) {
+			promptCount++
+			if promptCount == 1 {
+				return "admin", nil
+			}
+			return "secret", nil
+		})
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+}
+
+type multiStepHandler struct {
+	onStart    func(context.Context, *AuthenRequest) *AuthenReply
+	onContinue func(context.Context, *AuthenContinueRequest) *AuthenReply
+}
+
+func (h *multiStepHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	if h.onStart != nil {
+		return h.onStart(ctx, req)
+	}
+	return &AuthenReply{Status: AuthenStatusPass}
+}
+
+func (h *multiStepHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
+	if h.onContinue != nil {
+		return h.onContinue(ctx, req)
+	}
+	return &AuthenReply{Status: AuthenStatusPass}
+}
+
+func TestServerBodyTooLarge(t *testing.T) {
+	t.Run("reject packet with body too large", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithServerMaxBodyLength(100),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect and send packet with large body
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		header := &Header{
+			Version:   MajorVersion<<4 | MinorVersionDefault,
+			Type:      PacketTypeAuthen,
+			SeqNo:     1,
+			Flags:     0,
+			SessionID: 12345,
+			Length:    200, // Larger than max
+		}
+
+		headerData, _ := header.MarshalBinary()
+		conn.Write(headerData)
+
+		// Server should close connection
+		buf := make([]byte, 1)
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err = conn.Read(buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestServerShutdownTimeout(t *testing.T) {
+	t.Run("shutdown with short timeout", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		time.Sleep(50 * time.Millisecond)
+
+		// Shutdown with reasonable timeout (no active connections, should complete immediately)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err = server.Shutdown(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("shutdown when not running", func(t *testing.T) {
+		server := NewServer(WithServerSecret("testsecret"))
+		err := server.Shutdown(context.Background())
+		assert.NoError(t, err)
+	})
+}
+
+func TestServerServeErrors(t *testing.T) {
+	t.Run("serve without listener", func(t *testing.T) {
+		server := NewServer(WithServerSecret("testsecret"))
+		err := server.Serve()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no listener")
+	})
+
+	t.Run("serve when already running", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+		)
+
+		go func() { server.Serve() }()
+		time.Sleep(50 * time.Millisecond)
+		defer server.Shutdown(context.Background())
+
+		err = server.Serve()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "already running")
+	})
+}
+
+func TestServerIsRunning(t *testing.T) {
+	t.Run("running state", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(WithServerListener(ln))
+		assert.False(t, server.IsRunning())
+
+		go func() { server.Serve() }()
+		time.Sleep(50 * time.Millisecond)
+
+		assert.True(t, server.IsRunning())
+
+		server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		assert.False(t, server.IsRunning())
+	})
+}
+
+func TestServerNilHandlerResponse(t *testing.T) {
+	t.Run("nil authentication response", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+			return nil
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
+		require.NoError(t, err)
+		assert.True(t, reply.IsError())
+	})
+
+	t.Run("nil authorization response", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handler := AuthorHandlerFunc(func(_ context.Context, _ *AuthorRequestContext) *AuthorResponse {
+			return nil
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthorizationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsError())
+	})
+
+	t.Run("nil accounting response", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handler := AcctHandlerFunc(func(_ context.Context, _ *AcctRequestContext) *AcctReply {
+			return nil
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAccountingHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
+		require.NoError(t, err)
+		assert.True(t, reply.IsError())
+	})
+
+	t.Run("nil authentication continue response", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+				return &AuthenReply{
+					Status:    AuthenStatusGetPass,
+					ServerMsg: []byte("Password: "),
+				}
+			},
+			onContinue: func(_ context.Context, _ *AuthenContinueRequest) *AuthenReply {
+				return nil // Return nil to test error handling
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "password", nil
+		})
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsError())
+	})
+}
+
+func TestServerInvalidPackets(t *testing.T) {
+	t.Run("invalid continue packet", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		// Use handler that returns GETPASS to allow multi-step auth
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+				return &AuthenReply{
+					Status:    AuthenStatusGetPass,
+					ServerMsg: []byte("Password: "),
+				}
+			},
+			onContinue: func(_ context.Context, _ *AuthenContinueRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusPass}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect and send invalid continue packet
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		secret := []byte("testsecret")
+
+		// First send a valid START packet to get a session going
+		start := &AuthenStart{
+			Action:     AuthenActionLogin,
+			AuthenType: AuthenTypeASCII,
+			Service:    AuthenServiceLogin,
+			User:       []byte("testuser"),
+		}
+		startBody, _ := start.MarshalBinary()
+
+		header := &Header{
+			Version:   0xc0,
+			Type:      PacketTypeAuthen,
+			SeqNo:     1,
+			SessionID: 12345,
+			Length:    uint32(len(startBody)),
+		}
+
+		obfuscatedStartBody := Obfuscate(header, secret, startBody)
+		headerData, _ := header.MarshalBinary()
+
+		conn.Write(headerData)
+		conn.Write(obfuscatedStartBody)
+
+		// Read GETPASS response
+		respHeaderBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, respHeaderBuf)
+
+		respHeader := &Header{}
+		respHeader.UnmarshalBinary(respHeaderBuf)
+
+		respBody := make([]byte, respHeader.Length)
+		io.ReadFull(conn, respBody)
+
+		// Verify we got GETPASS
+		deobfResp := Obfuscate(respHeader, secret, respBody)
+		reply := &AuthenReply{}
+		reply.UnmarshalBinary(deobfResp)
+		require.Equal(t, uint8(AuthenStatusGetPass), reply.Status)
+
+		// Now send an invalid CONTINUE packet (too short body)
+		continueHeader := &Header{
+			Version:   0xc0,
+			Type:      PacketTypeAuthen,
+			SeqNo:     3,
+			SessionID: 12345,
+			Length:    1, // Too short for a valid CONTINUE
+		}
+
+		invalidBody := []byte{0xFF}
+		obfuscatedBody := Obfuscate(continueHeader, secret, invalidBody)
+		continueHeaderData, _ := continueHeader.MarshalBinary()
+
+		conn.Write(continueHeaderData)
+		conn.Write(obfuscatedBody)
+
+		// Read error response
+		errHeaderBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, errHeaderBuf)
+
+		errHeader := &Header{}
+		errHeader.UnmarshalBinary(errHeaderBuf)
+
+		errBody := make([]byte, errHeader.Length)
+		io.ReadFull(conn, errBody)
+		errBody = Obfuscate(errHeader, secret, errBody)
+
+		errReply := &AuthenReply{}
+		errReply.UnmarshalBinary(errBody)
+
+		assert.Equal(t, uint8(AuthenStatusError), errReply.Status)
+	})
+
+	t.Run("invalid authorization packet", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		secret := []byte("testsecret")
+		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAuthor, secret)
+
+		resp := &AuthorResponse{}
+		resp.UnmarshalBinary(respBody)
+
+		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+	})
+
+	t.Run("invalid accounting packet", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		secret := []byte("testsecret")
+		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAcct, secret)
+
+		reply := &AcctReply{}
+		reply.UnmarshalBinary(respBody)
+
+		assert.Equal(t, uint8(AcctStatusError), reply.Status)
 	})
 }

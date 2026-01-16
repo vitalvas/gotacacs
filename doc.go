@@ -10,7 +10,8 @@
 //
 // Create a client to connect to a TACACS+ server:
 //
-//	client := gotacacs.NewClient("tacacs.example.com:49",
+//	client := gotacacs.NewClient(
+//		gotacacs.WithAddress("tacacs.example.com:49"),
 //		gotacacs.WithSecret("sharedsecret"),
 //		gotacacs.WithTimeout(30*time.Second),
 //	)
@@ -67,27 +68,49 @@
 //
 //	type myHandler struct{}
 //
-//	func (h *myHandler) HandleAuthenStart(ctx context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+//	func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
 //		if string(req.Start.User) == "admin" && string(req.Start.Data) == "password" {
 //			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
 //		}
 //		return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
 //	}
 //
-//	func (h *myHandler) HandleAuthenContinue(ctx context.Context, req *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
+//	func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
 //		return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
 //	}
 //
-//	func (h *myHandler) HandleAuthorRequest(ctx context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
+//	func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
 //		return &gotacacs.AuthorResponse{
 //			Status: gotacacs.AuthorStatusPassAdd,
 //			Args:   [][]byte{[]byte("priv-lvl=15")},
 //		}
 //	}
 //
-//	func (h *myHandler) HandleAcctRequest(ctx context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
+//	func (h *myHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
 //		return &gotacacs.AcctReply{Status: gotacacs.AcctStatusSuccess}
 //	}
+//
+// # Per-Client Secret Provider
+//
+// Use SecretProviderFunc to return different secrets and custom user data per client:
+//
+//	secretProvider := gotacacs.SecretProviderFunc(func(ctx context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+//		return gotacacs.SecretResponse{
+//			Secret: []byte("sharedsecret"),
+//			UserData: map[string]string{
+//				"client_ip": req.RemoteAddr.String(),
+//				"local_ip":  req.LocalAddr.String(),
+//			},
+//		}
+//	})
+//
+//	server := gotacacs.NewServer(
+//		gotacacs.WithServerListener(ln),
+//		gotacacs.WithSecretProvider(secretProvider),
+//		gotacacs.WithHandler(&myHandler{}),
+//	)
+//
+// The UserData map is available in all handler request contexts via req.UserData.
 //
 // # TLS Support
 //
@@ -97,7 +120,8 @@
 //	tlsConfig := &tls.Config{
 //		RootCAs: certPool,
 //	}
-//	client := gotacacs.NewClient("tacacs.example.com:49",
+//	client := gotacacs.NewClient(
+//		gotacacs.WithAddress("tacacs.example.com:49"),
 //		gotacacs.WithSecret("sharedsecret"),
 //		gotacacs.WithTLSConfig(tlsConfig),
 //	)
@@ -113,7 +137,8 @@
 //
 // Enable single-connect mode to reuse connections for multiple requests:
 //
-//	client := gotacacs.NewClient("tacacs.example.com:49",
+//	client := gotacacs.NewClient(
+//		gotacacs.WithAddress("tacacs.example.com:49"),
 //		gotacacs.WithSecret("sharedsecret"),
 //		gotacacs.WithSingleConnect(true),
 //	)

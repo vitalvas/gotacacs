@@ -136,7 +136,7 @@ func TestListenTCP(t *testing.T) {
 		}()
 
 		// Connect
-		dialer := DefaultTCPDialer()
+		dialer := &TCPDialer{Timeout: 30 * time.Second}
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
 		require.NoError(t, err)
 		conn.Close()
@@ -177,44 +177,6 @@ func TestListenTLS(t *testing.T) {
 		config := &tls.Config{}
 		_, err := ListenTLS("invalid:address:format", config)
 		assert.Error(t, err)
-	})
-}
-
-func TestDefaultDialers(t *testing.T) {
-	t.Run("default TCP dialer", func(t *testing.T) {
-		dialer := DefaultTCPDialer()
-		assert.NotNil(t, dialer)
-		assert.Equal(t, 30*time.Second, dialer.Timeout)
-	})
-
-	t.Run("default TLS dialer", func(t *testing.T) {
-		config := &tls.Config{InsecureSkipVerify: true}
-		dialer := DefaultTLSDialer(config)
-		assert.NotNil(t, dialer)
-		assert.Equal(t, 30*time.Second, dialer.Timeout)
-		assert.Equal(t, config, dialer.Config)
-	})
-
-	t.Run("default TLS dialer with nil config", func(t *testing.T) {
-		dialer := DefaultTLSDialer(nil)
-		assert.NotNil(t, dialer)
-		assert.Nil(t, dialer.Config)
-	})
-}
-
-func TestNewTLSClientConfig(t *testing.T) {
-	t.Run("create client config", func(t *testing.T) {
-		config := NewTLSClientConfig("example.com", false)
-		assert.NotNil(t, config)
-		assert.Equal(t, "example.com", config.ServerName)
-		assert.False(t, config.InsecureSkipVerify)
-		assert.Equal(t, uint16(tls.VersionTLS12), config.MinVersion)
-	})
-
-	t.Run("create insecure client config", func(t *testing.T) {
-		config := NewTLSClientConfig("", true)
-		assert.NotNil(t, config)
-		assert.True(t, config.InsecureSkipVerify)
 	})
 }
 

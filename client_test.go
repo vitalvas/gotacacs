@@ -12,9 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockResponseConfig configures how the mock handler should respond
+type mockResponseConfig struct {
+	packetType uint8
+	seqNo      uint8
+	sessionMod uint32 // added to session ID (0 = correct, 1+ = mismatch)
+	body       []byte
+}
+
+// createMockHandler creates a handler that reads a request and sends a configured response
+func createMockHandler(secret []byte, cfg mockResponseConfig) func(net.Conn) {
+	return func(conn net.Conn) {
+		defer conn.Close()
+
+		headerBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, headerBuf)
+
+		header := &Header{}
+		header.UnmarshalBinary(headerBuf)
+
+		body := make([]byte, header.Length)
+		io.ReadFull(conn, body)
+
+		respHeader := &Header{
+			Version:   0xc0,
+			Type:      cfg.packetType,
+			SeqNo:     cfg.seqNo,
+			SessionID: header.SessionID + cfg.sessionMod,
+			Length:    uint32(len(cfg.body)),
+		}
+
+		obfuscatedBody := Obfuscate(respHeader, secret, cfg.body)
+		respHeaderData, _ := respHeader.MarshalBinary()
+
+		conn.Write(respHeaderData)
+		conn.Write(obfuscatedBody)
+	}
+}
+
 func TestNewClient(t *testing.T) {
 	t.Run("create with defaults", func(t *testing.T) {
-		client := NewClient("localhost:49")
+		client := NewClient(WithAddress("localhost:49"))
 		assert.NotNil(t, client)
 		assert.Equal(t, "localhost:49", client.Address())
 		assert.Equal(t, 30*time.Second, client.timeout)
@@ -22,7 +60,7 @@ func TestNewClient(t *testing.T) {
 	})
 
 	t.Run("create with options", func(t *testing.T) {
-		client := NewClient("localhost:49",
+		client := NewClient(WithAddress("localhost:49"),
 			WithTimeout(10*time.Second),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
@@ -34,7 +72,7 @@ func TestNewClient(t *testing.T) {
 
 	t.Run("create with TLS", func(t *testing.T) {
 		tlsConfig := &tls.Config{InsecureSkipVerify: true}
-		client := NewClient("localhost:49", WithTLSConfig(tlsConfig))
+		client := NewClient(WithAddress("localhost:49"), WithTLSConfig(tlsConfig))
 		assert.NotNil(t, client.dialer)
 		_, ok := client.dialer.(*TLSDialer)
 		assert.True(t, ok)
@@ -42,14 +80,19 @@ func TestNewClient(t *testing.T) {
 
 	t.Run("create with custom dialer", func(t *testing.T) {
 		dialer := &TCPDialer{Timeout: 5 * time.Second}
-		client := NewClient("localhost:49", WithDialer(dialer))
+		client := NewClient(WithAddress("localhost:49"), WithDialer(dialer))
 		assert.Equal(t, dialer, client.dialer)
 	})
 
 	t.Run("with secret bytes", func(t *testing.T) {
 		secret := []byte{0x01, 0x02, 0x03}
-		client := NewClient("localhost:49", WithSecretBytes(secret))
+		client := NewClient(WithAddress("localhost:49"), WithSecretBytes(secret))
 		assert.Equal(t, secret, client.secret)
+	})
+
+	t.Run("with max body length", func(t *testing.T) {
+		client := NewClient(WithAddress("localhost:49"), WithMaxBodyLength(1024))
+		assert.Equal(t, uint32(1024), client.maxBodyLength)
 	})
 }
 
@@ -68,7 +111,7 @@ func TestClientConnect(t *testing.T) {
 			}
 		}()
 
-		client := NewClient(ln.Addr().String(), WithTimeout(5*time.Second))
+		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(5*time.Second))
 		err = client.Connect(context.Background())
 		require.NoError(t, err)
 		assert.True(t, client.IsConnected())
@@ -82,14 +125,14 @@ func TestClientConnect(t *testing.T) {
 	})
 
 	t.Run("connect failure", func(t *testing.T) {
-		client := NewClient("127.0.0.1:1", WithTimeout(100*time.Millisecond))
+		client := NewClient(WithAddress("127.0.0.1:1"), WithTimeout(100*time.Millisecond))
 		err := client.Connect(context.Background())
 		assert.Error(t, err)
 		assert.False(t, client.IsConnected())
 	})
 
 	t.Run("close when not connected", func(t *testing.T) {
-		client := NewClient("localhost:49")
+		client := NewClient(WithAddress("localhost:49"))
 		err := client.Close()
 		assert.NoError(t, err)
 	})
@@ -97,7 +140,7 @@ func TestClientConnect(t *testing.T) {
 
 func TestClientAddresses(t *testing.T) {
 	t.Run("local and remote addr when not connected", func(t *testing.T) {
-		client := NewClient("localhost:49")
+		client := NewClient(WithAddress("localhost:49"))
 		assert.Nil(t, client.LocalAddr())
 		assert.Nil(t, client.RemoteAddr())
 	})
@@ -115,7 +158,7 @@ func TestClientAddresses(t *testing.T) {
 			}
 		}()
 
-		client := NewClient(ln.Addr().String())
+		client := NewClient(WithAddress(ln.Addr().String()))
 		err = client.Connect(context.Background())
 		require.NoError(t, err)
 		defer client.Close()
@@ -210,7 +253,7 @@ func TestClientAuthenticate(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 		require.NoError(t, err)
 		assert.True(t, reply.IsPass())
@@ -255,7 +298,7 @@ func TestClientAuthenticate(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "wrongpass")
 		require.NoError(t, err)
 		assert.True(t, reply.IsFail())
@@ -302,7 +345,7 @@ func TestClientAuthorize(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell", "cmd=show"})
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
@@ -348,7 +391,7 @@ func TestClientAccounting(t *testing.T) {
 		server := newMockServer(t, makeAcctHandler(secret))
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
@@ -359,7 +402,7 @@ func TestClientAccounting(t *testing.T) {
 		server := newMockServer(t, makeAcctHandler(secret))
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStop, "testuser", []string{"elapsed_time=60"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
@@ -370,7 +413,7 @@ func TestClientAccounting(t *testing.T) {
 		server := newMockServer(t, makeAcctHandler(secret))
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagWatchdog, "testuser", []string{"bytes_in=1024"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
@@ -387,7 +430,7 @@ func TestClientConnectionErrors(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithTimeout(time.Second))
+		client := NewClient(WithAddress(server.Addr()), WithTimeout(time.Second))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 		assert.Error(t, err)
 	})
@@ -421,7 +464,7 @@ func TestClientConnectionErrors(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr())
+		client := NewClient(WithAddress(server.Addr()))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 		assert.Error(t, err)
 	})
@@ -468,7 +511,7 @@ func TestClientSingleConnect(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(),
+		client := NewClient(WithAddress(server.Addr()),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
 		)
@@ -524,7 +567,7 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 
 		require.Error(t, err)
@@ -573,7 +616,7 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 
 		require.Error(t, err)
@@ -622,7 +665,7 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			return "password", nil
 		})
@@ -672,7 +715,7 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(server.Addr(), WithSecret("testsecret"))
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			return "password", nil
 		})
@@ -680,5 +723,405 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrAuthenRestart)
 		assert.NotNil(t, reply)
+	})
+}
+
+func TestClientErrorPaths(t *testing.T) {
+	t.Run("authenticate ascii connection refused", func(t *testing.T) {
+		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		assert.Error(t, err)
+	})
+
+	t.Run("authorize connection refused", func(t *testing.T) {
+		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+		assert.Error(t, err)
+	})
+
+	t.Run("accounting connection refused", func(t *testing.T) {
+		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		assert.Error(t, err)
+	})
+
+	t.Run("authenticate ascii promptHandler error", func(t *testing.T) {
+		secret := []byte("testsecret")
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send GETPASS reply
+			reply := &AuthenReply{
+				Status:    AuthenStatusGetPass,
+				ServerMsg: []byte("Password: "),
+				Flags:     AuthenReplyFlagNoEcho,
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+
+			// Read the CONTINUE (which will be an abort)
+			headerBuf2 := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf2)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "", assert.AnError
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("authenticate ascii unexpected status", func(t *testing.T) {
+		secret := []byte("testsecret")
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send reply with unexpected status (invalid value)
+			reply := &AuthenReply{
+				Status:    0xFF, // Invalid status
+				ServerMsg: []byte("Invalid"),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "password", nil
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected authentication status")
+	})
+
+	t.Run("authenticate ascii recvPacket error", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			// Read header only then close - simulate incomplete response
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Close without sending response
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			return "password", nil
+		})
+
+		require.Error(t, err)
+	})
+
+	t.Run("authorize recvPacket error", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Close without response
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+		assert.Error(t, err)
+	})
+
+	t.Run("accounting recvPacket error", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Close without response
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		assert.Error(t, err)
+	})
+
+	t.Run("authorize wrong packet type", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen, // Wrong type!
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidType)
+	})
+
+	t.Run("accounting wrong packet type", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen, // Wrong type!
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidType)
+	})
+
+	t.Run("authorize session id mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		resp := &AuthorResponse{Status: AuthorStatusPassAdd}
+		respBody, _ := resp.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthor,
+			seqNo:      2,
+			sessionMod: 1, // Wrong session ID!
+			body:       respBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+	})
+
+	t.Run("authorize sequence number mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		resp := &AuthorResponse{Status: AuthorStatusPassAdd}
+		respBody, _ := resp.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthor,
+			seqNo:      5, // Wrong sequence! Should be 2
+			body:       respBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSequence)
+	})
+
+	t.Run("recvPacket body too large", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send response with body length exceeding max
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    1024 * 1024, // 1MB - exceeds default max
+			}
+
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			// Don't write body - just the header with large length
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrBodyTooLarge)
+	})
+
+	t.Run("recvPacket invalid header version", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send response with invalid version
+			respHeader := &Header{
+				Version:   0x00, // Invalid version (major should be 0xc)
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    0,
+			}
+
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidVersion)
+	})
+
+	t.Run("accounting session id mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AcctReply{Status: AcctStatusSuccess}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct,
+			seqNo:      2,
+			sessionMod: 1, // Wrong!
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+	})
+
+	t.Run("accounting sequence number mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AcctReply{Status: AcctStatusSuccess}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct,
+			seqNo:      5, // Wrong! Should be 2
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSequence)
 	})
 }

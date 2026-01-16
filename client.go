@@ -27,6 +27,13 @@ type Client struct {
 // ClientOption is a function that configures a Client.
 type ClientOption func(*Client)
 
+// WithAddress sets the server address to connect to.
+func WithAddress(address string) ClientOption {
+	return func(c *Client) {
+		c.address = address
+	}
+}
+
 // WithTimeout sets the connection and operation timeout.
 func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
@@ -85,11 +92,10 @@ func WithMaxBodyLength(maxLength uint32) ClientOption {
 }
 
 // NewClient creates a new TACACS+ client.
-func NewClient(address string, opts ...ClientOption) *Client {
+func NewClient(opts ...ClientOption) *Client {
 	c := &Client{
-		address:       address,
 		timeout:       30 * time.Second,
-		dialer:        DefaultTCPDialer(),
+		dialer:        &TCPDialer{Timeout: 30 * time.Second},
 		maxBodyLength: DefaultMaxBodyLength,
 	}
 

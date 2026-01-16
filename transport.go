@@ -124,21 +124,6 @@ func ListenTLS(address string, config *tls.Config) (Listener, error) {
 	return &tcpListener{Listener: ln}, nil
 }
 
-// DefaultTCPDialer returns a TCP dialer with default settings.
-func DefaultTCPDialer() *TCPDialer {
-	return &TCPDialer{
-		Timeout: 30 * time.Second,
-	}
-}
-
-// DefaultTLSDialer returns a TLS dialer with default settings.
-func DefaultTLSDialer(config *tls.Config) *TLSDialer {
-	return &TLSDialer{
-		Timeout: 30 * time.Second,
-		Config:  config,
-	}
-}
-
 // NewTLSConfig creates a TLS config for TACACS+ connections.
 // This is a helper function to create a basic TLS configuration.
 func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
@@ -150,15 +135,6 @@ func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	}, nil
-}
-
-// NewTLSClientConfig creates a TLS config for TACACS+ client connections.
-func NewTLSClientConfig(serverName string, insecureSkipVerify bool) *tls.Config {
-	return &tls.Config{
-		ServerName:         serverName,
-		InsecureSkipVerify: insecureSkipVerify,
-		MinVersion:         tls.VersionTLS12,
-	}
 }
 
 // writeAll writes all bytes to the connection, handling partial writes.

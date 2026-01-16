@@ -10,27 +10,35 @@ import (
 	"time"
 )
 
+// SecretRequest contains information about the client connection for secret lookup.
+type SecretRequest struct {
+	// RemoteAddr is the remote address of the client.
+	RemoteAddr net.Addr
+	// LocalAddr is the local address of the server connection.
+	LocalAddr net.Addr
+}
+
+// SecretResponse contains the secret and optional user data for a client.
+type SecretResponse struct {
+	// Secret is the shared secret for packet obfuscation.
+	// If nil, packets will not be obfuscated.
+	Secret []byte
+	// UserData is optional metadata passed to handlers.
+	UserData map[string]string
+}
+
 // SecretProvider provides per-client shared secrets and optional user data.
 type SecretProvider interface {
-	// GetSecret returns the shared secret and optional user data for the given remote address.
-	// If no secret is found, it should return nil for secret.
-	// The userData map can be used to pass client metadata to handlers.
-	GetSecret(remoteAddr net.Addr) (secret []byte, userData map[string]string)
+	// GetSecret returns the shared secret and optional user data for the given request.
+	GetSecret(ctx context.Context, req SecretRequest) SecretResponse
 }
 
 // SecretProviderFunc is an adapter to allow ordinary functions to be used as SecretProvider.
-type SecretProviderFunc func(remoteAddr net.Addr) ([]byte, map[string]string)
+type SecretProviderFunc func(ctx context.Context, req SecretRequest) SecretResponse
 
 // GetSecret implements SecretProvider.
-func (f SecretProviderFunc) GetSecret(remoteAddr net.Addr) ([]byte, map[string]string) {
-	return f(remoteAddr)
-}
-
-// StaticSecretProvider returns a SecretProvider that always returns the same secret.
-func StaticSecretProvider(secret []byte) SecretProvider {
-	return SecretProviderFunc(func(_ net.Addr) ([]byte, map[string]string) {
-		return secret, nil
-	})
+func (f SecretProviderFunc) GetSecret(ctx context.Context, req SecretRequest) SecretResponse {
+	return f(ctx, req)
 }
 
 // AuthenRequest represents an authentication request context.
@@ -145,15 +153,20 @@ func WithSecretProvider(provider SecretProvider) ServerOption {
 
 // WithServerSecret sets a static secret for all clients.
 func WithServerSecret(secret string) ServerOption {
+	secretBytes := []byte(secret)
 	return func(s *Server) {
-		s.secretProvider = StaticSecretProvider([]byte(secret))
+		s.secretProvider = SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: secretBytes}
+		})
 	}
 }
 
 // WithServerSecretBytes sets a static secret for all clients.
 func WithServerSecretBytes(secret []byte) ServerOption {
 	return func(s *Server) {
-		s.secretProvider = StaticSecretProvider(secret)
+		s.secretProvider = SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: secret}
+		})
 	}
 }
 
@@ -334,8 +347,15 @@ func (s *Server) handleConnection(conn Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
-	remoteAddr := conn.RemoteAddr()
-	secret, userData := s.getSecret(remoteAddr)
+	ctx := context.Background()
+	secretReq := SecretRequest{
+		RemoteAddr: conn.RemoteAddr(),
+		LocalAddr:  conn.LocalAddr(),
+	}
+	secretResp := s.getSecret(ctx, secretReq)
+	secret := secretResp.Secret
+	userData := secretResp.UserData
+	remoteAddr := secretReq.RemoteAddr
 
 	// Use connection-local session map to prevent cross-client session hijacking
 	// Also mirror to sessionStore for custom store support (metrics, persistence)
@@ -441,20 +461,21 @@ func (s *Server) handleConnection(conn Conn) {
 		if session.State() == SessionStateComplete || session.State() == SessionStateError {
 			delete(localSessions, header.SessionID)
 			s.sessionStore.Delete(header.SessionID)
-		}
 
-		// Check if single-connect mode
-		if header.Flags&FlagSingleConnect == 0 {
-			return
+			// Close connection if not single-connect mode
+			// Single-connect mode allows multiple sessions on one connection
+			if header.Flags&FlagSingleConnect == 0 {
+				return
+			}
 		}
 	}
 }
 
-func (s *Server) getSecret(remoteAddr net.Addr) ([]byte, map[string]string) {
+func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretResponse {
 	if s.secretProvider == nil {
-		return nil, nil
+		return SecretResponse{}
 	}
-	return s.secretProvider.GetSecret(remoteAddr)
+	return s.secretProvider.GetSecret(ctx, req)
 }
 
 func (s *Server) readPacket(conn Conn, secret []byte) (*Header, []byte, error) {

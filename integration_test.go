@@ -86,7 +86,7 @@ func TestIntegrationPAPAuthentication(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
 		require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestIntegrationPAPAuthentication(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "wrongpassword")
 		require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestIntegrationPAPAuthentication(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "unknownuser", "anypassword")
 		require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestIntegrationAuthorization(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		resp, err := client.Authorize(context.Background(), "admin", []string{"service=shell", "cmd=configure"})
 		require.NoError(t, err)
@@ -177,7 +177,7 @@ func TestIntegrationAuthorization(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		resp, err := client.Authorize(context.Background(), "readonly", []string{"service=shell"})
 		require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestIntegrationAuthorization(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		resp, err := client.Authorize(context.Background(), "unknown", []string{"service=shell"})
 		require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestIntegrationAccounting(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		// Start
 		startReply, err := client.Accounting(context.Background(), AcctFlagStart, "admin", []string{"task_id=12345", "service=shell"})
@@ -264,7 +264,7 @@ func TestIntegrationTLS(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		clientConfig := &tls.Config{InsecureSkipVerify: true}
-		client := NewClient(ln.Addr().String(),
+		client := NewClient(WithAddress(ln.Addr().String()),
 			WithSecret("sharedsecret"),
 			WithTLSConfig(clientConfig),
 		)
@@ -290,7 +290,7 @@ func TestIntegrationSingleConnect(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(),
+		client := NewClient(WithAddress(ln.Addr().String()),
 			WithSecret("sharedsecret"),
 			WithSingleConnect(true),
 		)
@@ -340,7 +340,7 @@ func TestIntegrationConcurrentClients(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+				client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 				for range requestsPerClient {
 					reply, err := client.Authenticate(context.Background(), "user", "user123")
@@ -372,7 +372,9 @@ func TestIntegrationPerClientSecret(t *testing.T) {
 
 		// Use a secret provider that returns a static secret
 		// (In a real scenario, this would be based on the client address)
-		provider := StaticSecretProvider([]byte("clientsecret"))
+		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{Secret: []byte("clientsecret")}
+		})
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -384,7 +386,7 @@ func TestIntegrationPerClientSecret(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("clientsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("clientsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
 		require.NoError(t, err)
@@ -408,7 +410,7 @@ func TestIntegrationUnencryptedMode(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Client without secret
-		client := NewClient(ln.Addr().String())
+		client := NewClient(WithAddress(ln.Addr().String()))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
 		require.NoError(t, err)
@@ -431,7 +433,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(ln.Addr().String(), WithSecret("sharedsecret"))
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		// 1. Authenticate user
 		authenReply, err := client.Authenticate(context.Background(), "user", "user123")
