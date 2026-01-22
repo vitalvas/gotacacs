@@ -88,6 +88,22 @@ func TestAuthenContinueFlagConstants(t *testing.T) {
 	})
 }
 
+func TestAuthenMethodConstants(t *testing.T) {
+	t.Run("authentication methods", func(t *testing.T) {
+		assert.Equal(t, uint8(0x00), uint8(AuthenMethodNotSet))
+		assert.Equal(t, uint8(0x01), uint8(AuthenMethodNone))
+		assert.Equal(t, uint8(0x02), uint8(AuthenMethodKRB5))
+		assert.Equal(t, uint8(0x03), uint8(AuthenMethodLine))
+		assert.Equal(t, uint8(0x04), uint8(AuthenMethodEnable))
+		assert.Equal(t, uint8(0x05), uint8(AuthenMethodLocal))
+		assert.Equal(t, uint8(0x06), uint8(AuthenMethodTACACSPlus))
+		assert.Equal(t, uint8(0x08), uint8(AuthenMethodGuest))
+		assert.Equal(t, uint8(0x10), uint8(AuthenMethodRadius))
+		assert.Equal(t, uint8(0x11), uint8(AuthenMethodKRB4))
+		assert.Equal(t, uint8(0x20), uint8(AuthenMethodRCMD))
+	})
+}
+
 func TestAuthorStatusConstants(t *testing.T) {
 	t.Run("authorization status codes", func(t *testing.T) {
 		assert.Equal(t, uint8(0x01), uint8(AuthorStatusPassAdd))
@@ -121,6 +137,18 @@ func TestMiscConstants(t *testing.T) {
 
 	t.Run("default port", func(t *testing.T) {
 		assert.Equal(t, 49, DefaultPort)
+	})
+
+	t.Run("default TLS port (RFC 9887)", func(t *testing.T) {
+		assert.Equal(t, 300, DefaultTLSPort)
+	})
+
+	t.Run("minimum PSK length (RFC 9887)", func(t *testing.T) {
+		assert.Equal(t, 16, MinPSKLength)
+	})
+
+	t.Run("TLS session ticket key length", func(t *testing.T) {
+		assert.Equal(t, 32, TLSSessionTicketKeyLength)
 	})
 
 	t.Run("default max body length", func(t *testing.T) {

@@ -76,6 +76,19 @@ func TestNewClient(t *testing.T) {
 		assert.NotNil(t, client.dialer)
 		_, ok := client.dialer.(*TLSDialer)
 		assert.True(t, ok)
+		assert.False(t, client.IsTLSMode(), "WithTLSConfig should not enable RFC 9887 mode")
+	})
+
+	t.Run("create with TLS 1.3 RFC 9887 mode", func(t *testing.T) {
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			MaxVersion: tls.VersionTLS13,
+		}
+		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
+		assert.NotNil(t, client.dialer)
+		_, ok := client.dialer.(*TLSDialer)
+		assert.True(t, ok)
+		assert.True(t, client.IsTLSMode(), "WithTLS13Config should enable RFC 9887 mode")
 	})
 
 	t.Run("create with custom dialer", func(t *testing.T) {
@@ -93,6 +106,44 @@ func TestNewClient(t *testing.T) {
 	t.Run("with max body length", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"), WithMaxBodyLength(1024))
 		assert.Equal(t, uint32(1024), client.maxBodyLength)
+	})
+
+	t.Run("WithTLS13Config with nil config does not panic", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			client := NewClient(WithAddress("localhost:300"), WithTLS13Config(nil))
+			assert.True(t, client.IsTLSMode())
+			if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
+				assert.NotNil(t, tlsDialer.Config)
+				assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion)
+			}
+		})
+	})
+
+	t.Run("WithTLS13Config normalizes MaxVersion below TLS 1.3", func(t *testing.T) {
+		// Config with MaxVersion set to TLS 1.2 (invalid for RFC 9887)
+		tlsConfig := &tls.Config{
+			MaxVersion: tls.VersionTLS12,
+		}
+		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
+
+		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
+			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion,
+				"MinVersion should be TLS 1.3")
+			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MaxVersion,
+				"MaxVersion should be normalized to TLS 1.3")
+		}
+	})
+
+	t.Run("WithTLS13Config preserves MaxVersion at or above TLS 1.3", func(t *testing.T) {
+		// Config with MaxVersion already at TLS 1.3
+		tlsConfig := &tls.Config{
+			MaxVersion: tls.VersionTLS13,
+		}
+		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
+
+		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
+			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MaxVersion)
+		}
 	})
 }
 
@@ -1123,5 +1174,66 @@ func TestClientErrorPaths(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidSequence)
+	})
+
+	t.Run("RFC 9887 tlsMode on non-TLS connection uses obfuscation", func(t *testing.T) {
+		// This test verifies that even if tlsMode is set, a non-TLS connection
+		// still uses obfuscation (security fix for bug #2)
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Deobfuscate the body (client should have obfuscated it)
+			body = Obfuscate(header, secret, body)
+
+			// Parse and verify we got a valid START packet
+			start := &AuthenStart{}
+			err := start.UnmarshalBinary(body)
+			if err != nil {
+				// If deobfuscation failed, client sent unobfuscated data (bug!)
+				return
+			}
+
+			reply := &AuthenReply{Status: AuthenStatusPass}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				Flags:     0, // No unencrypted flag (obfuscated)
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			obfuscatedBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+
+			conn.Write(respHeaderData)
+			conn.Write(obfuscatedBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		// Create client with tlsMode enabled but using TCP connection
+		// The client should still use obfuscation because connection is not TLS
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		client.tlsMode = true // This should be ignored for non-TLS connections
+
+		reply, err := client.Authenticate(context.Background(), "user", "pass")
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
 	})
 }

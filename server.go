@@ -357,6 +357,9 @@ func (s *Server) handleConnection(conn Conn) {
 	userData := secretResp.UserData
 	remoteAddr := secretReq.RemoteAddr
 
+	// RFC 9887: Detect if connection is TLS-secured
+	isTLS := IsTLSConn(conn)
+
 	// Use connection-local session map to prevent cross-client session hijacking
 	// Also mirror to sessionStore for custom store support (metrics, persistence)
 	localSessions := make(map[uint32]*Session)
@@ -379,7 +382,7 @@ func (s *Server) handleConnection(conn Conn) {
 			conn.SetReadDeadline(time.Now().Add(s.readTimeout))
 		}
 
-		header, body, err := s.readPacket(conn, secret)
+		header, body, err := s.readPacket(conn, secret, isTLS)
 		if err != nil {
 			if errors.Is(err, io.EOF) || isNetClosedError(err) {
 				return
@@ -453,7 +456,7 @@ func (s *Server) handleConnection(conn Conn) {
 			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 		}
 
-		if err := s.writePacket(conn, respHeader, respBody, secret); err != nil {
+		if err := s.writePacket(conn, respHeader, respBody, secret, isTLS); err != nil {
 			return
 		}
 
@@ -478,7 +481,7 @@ func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretRespons
 	return s.secretProvider.GetSecret(ctx, req)
 }
 
-func (s *Server) readPacket(conn Conn, secret []byte) (*Header, []byte, error) {
+func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
 	// Read header
 	headerBuf := make([]byte, HeaderLength)
 	if _, err := io.ReadFull(conn, headerBuf); err != nil {
@@ -493,6 +496,12 @@ func (s *Server) readPacket(conn Conn, secret []byte) (*Header, []byte, error) {
 	// Validate header version and type
 	if err := header.Validate(); err != nil {
 		return nil, nil, err
+	}
+
+	// RFC 9887: On TLS connections, the unencrypted flag MUST be set.
+	// Reject packets without the flag when using TLS.
+	if isTLS && !header.IsUnencrypted() {
+		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
 	}
 
 	// Validate body length to prevent memory exhaustion
@@ -510,16 +519,23 @@ func (s *Server) readPacket(conn Conn, secret []byte) (*Header, []byte, error) {
 	}
 
 	// Deobfuscate if needed (Obfuscate is symmetric)
-	if header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
+	// RFC 9887: Skip deobfuscation on TLS connections (TLS provides encryption)
+	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
 		body = Obfuscate(header, secret, body)
 	}
 
 	return header, body, nil
 }
 
-func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []byte) error {
+func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []byte, isTLS bool) error {
+	// RFC 9887: Set unencrypted flag on TLS connections
+	if isTLS {
+		header.SetUnencrypted(true)
+	}
+
 	// Obfuscate if needed
-	if header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
+	// RFC 9887: Skip obfuscation on TLS connections (TLS provides encryption)
+	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
 		body = Obfuscate(header, secret, body)
 	}
 

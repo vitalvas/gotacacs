@@ -418,6 +418,244 @@ func TestIntegrationUnencryptedMode(t *testing.T) {
 	})
 }
 
+func TestIntegrationRFC9887TLS13(t *testing.T) {
+	t.Run("RFC 9887 TLS 1.3 mode with unencrypted flag", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		// Server using TLS 1.3 config
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+			MaxVersion:   tls.VersionTLS13,
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithHandler(newTestIntegrationHandler()),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client using RFC 9887 TLS mode
+		clientConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			MaxVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLS13Config(clientConfig),
+			WithSingleConnect(true), // Keep connection open to verify TLS state
+		)
+		defer client.Close()
+
+		// Verify TLS mode is enabled
+		assert.True(t, client.IsTLSMode(), "Client should be in TLS mode")
+
+		// Authentication should work without shared secret (TLS provides encryption)
+		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		// Verify connection is TLS (now that connection is established)
+		assert.True(t, client.IsTLSConnection(), "Connection should be TLS")
+	})
+
+	t.Run("RFC 9887 authorization and accounting", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithHandler(newTestIntegrationHandler()),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		clientConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			MaxVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLS13Config(clientConfig),
+		)
+
+		// Authorization
+		resp, err := client.Authorize(context.Background(), "admin", []string{"service=shell"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsPass())
+		assert.Contains(t, resp.GetArgs(), "priv-lvl=15")
+
+		// Accounting
+		acctReply, err := client.Accounting(context.Background(), AcctFlagStart, "admin", []string{"task_id=1"})
+		require.NoError(t, err)
+		assert.True(t, acctReply.IsSuccess())
+	})
+
+	t.Run("RFC 9887 single-connect mode over TLS", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithHandler(newTestIntegrationHandler()),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		clientConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			MaxVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLS13Config(clientConfig),
+			WithSingleConnect(true),
+		)
+		defer client.Close()
+
+		// Multiple requests over single TLS connection
+		for i := range 5 {
+			reply, err := client.Authenticate(context.Background(), "user", "user123")
+			require.NoError(t, err, "Request %d should succeed", i)
+			assert.True(t, reply.IsPass())
+		}
+	})
+}
+
+func TestIntegrationRFC9887BugFixes(t *testing.T) {
+	t.Run("WithTLS13Config enforces TLS 1.3 MinVersion", func(t *testing.T) {
+		// Bug #1: Verify that WithTLS13Config enforces TLS 1.3
+		clientConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			// Intentionally not setting MinVersion to test enforcement
+		}
+
+		client := NewClient(
+			WithAddress("localhost:300"),
+			WithTLS13Config(clientConfig),
+		)
+
+		// The client should have TLS mode enabled
+		assert.True(t, client.IsTLSMode())
+
+		// Access the dialer to verify TLS config was modified
+		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
+			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion,
+				"WithTLS13Config should enforce TLS 1.3 MinVersion")
+		}
+	})
+
+	t.Run("TLS listener rejects TLS 1.2", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		// Server TLS listener enforces TLS 1.3
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12, // Allow TLS 1.2 at TLS level
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithHandler(newTestIntegrationHandler()),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client forcing TLS 1.2 should be rejected
+		clientConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			MaxVersion:         tls.VersionTLS12, // Force TLS 1.2
+			InsecureSkipVerify: true,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLSConfig(clientConfig),
+			WithSecret("test"),
+		)
+
+		_, err = client.Authenticate(context.Background(), "admin", "admin123")
+		// Should fail because listener enforces TLS 1.3
+		assert.Error(t, err, "TLS 1.2 connection should be rejected by TLS 1.3 listener")
+	})
+
+	t.Run("TLS listener accepts TLS 1.3", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithHandler(newTestIntegrationHandler()),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client using TLS 1.3 should work
+		clientConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLS13Config(clientConfig),
+		)
+
+		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
+		require.NoError(t, err, "TLS 1.3 connection should work with TLS 1.3 listener")
+		assert.True(t, reply.IsPass())
+	})
+}
+
 func TestIntegrationFullWorkflow(t *testing.T) {
 	t.Run("complete AAA workflow", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")

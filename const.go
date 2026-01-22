@@ -129,6 +129,43 @@ const (
 	AuthenContinueFlagAbort = 0x01
 )
 
+// Authentication method constants as defined in RFC8907 Section 6.1.
+// These indicate how the user was authenticated in authorization/accounting requests.
+const (
+	// AuthenMethodNotSet indicates the authentication method was not set.
+	AuthenMethodNotSet = 0x00
+
+	// AuthenMethodNone indicates no authentication was performed.
+	AuthenMethodNone = 0x01
+
+	// AuthenMethodKRB5 indicates Kerberos 5 authentication.
+	AuthenMethodKRB5 = 0x02
+
+	// AuthenMethodLine indicates line authentication (e.g., console password).
+	AuthenMethodLine = 0x03
+
+	// AuthenMethodEnable indicates enable authentication.
+	AuthenMethodEnable = 0x04
+
+	// AuthenMethodLocal indicates local database authentication.
+	AuthenMethodLocal = 0x05
+
+	// AuthenMethodTACACSPlus indicates TACACS+ authentication.
+	AuthenMethodTACACSPlus = 0x06
+
+	// AuthenMethodGuest indicates guest authentication.
+	AuthenMethodGuest = 0x08
+
+	// AuthenMethodRadius indicates RADIUS authentication.
+	AuthenMethodRadius = 0x10
+
+	// AuthenMethodKRB4 indicates Kerberos 4 authentication.
+	AuthenMethodKRB4 = 0x11
+
+	// AuthenMethodRCMD indicates RCMD authentication.
+	AuthenMethodRCMD = 0x20
+)
+
 // Authorization status codes as defined in RFC8907 Section 6.2.
 const (
 	// AuthorStatusPassAdd indicates authorization passed with additional arguments.
@@ -176,6 +213,18 @@ const HeaderLength = 12
 
 // DefaultPort is the default TACACS+ port as defined in RFC8907.
 const DefaultPort = 49
+
+// DefaultTLSPort is the default TACACS+ over TLS port as defined in RFC9887.
+// RFC 9887 specifies port 300 for TLS-secured TACACS+ connections (service name "tacacss").
+const DefaultTLSPort = 300
+
+// MinPSKLength is the minimum Pre-Shared Key length required by RFC 9887.
+// RFC 9887 specifies a minimum of 16 octets for PSK.
+const MinPSKLength = 16
+
+// TLSSessionTicketKeyLength is the required length for TLS session ticket keys.
+// Go's TLS implementation requires 32 bytes for session ticket keys.
+const TLSSessionTicketKeyLength = 32
 
 // DefaultMaxBodyLength is the default maximum allowed body length (256KB).
 // This prevents memory exhaustion attacks from malicious peers.

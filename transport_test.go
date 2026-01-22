@@ -8,11 +8,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"io"
 	"math/big"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -255,57 +253,6 @@ func TestListenerInterface(t *testing.T) {
 	})
 }
 
-func TestNewTLSConfig(t *testing.T) {
-	t.Run("load certificate from files", func(t *testing.T) {
-		// Create temporary certificate and key files
-		certFile, keyFile := createTempCertFiles(t)
-
-		config, err := NewTLSConfig(certFile, keyFile)
-		require.NoError(t, err)
-		require.NotNil(t, config)
-		assert.Len(t, config.Certificates, 1)
-		assert.Equal(t, uint16(tls.VersionTLS12), config.MinVersion)
-	})
-
-	t.Run("invalid certificate path", func(t *testing.T) {
-		_, err := NewTLSConfig("/nonexistent/cert.pem", "/nonexistent/key.pem")
-		assert.Error(t, err)
-	})
-}
-
-func createTempCertFiles(t *testing.T) (certFile, keyFile string) {
-	t.Helper()
-
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{Organization: []string{"Test"}},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	require.NoError(t, err)
-
-	// Write cert file
-	certFile = t.TempDir() + "/cert.pem"
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	require.NoError(t, os.WriteFile(certFile, certPEM, 0o600))
-
-	// Write key file
-	keyFile = t.TempDir() + "/key.pem"
-	keyDER, err := x509.MarshalECPrivateKey(priv)
-	require.NoError(t, err)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	require.NoError(t, os.WriteFile(keyFile, keyPEM, 0o600))
-
-	return certFile, keyFile
-}
-
 func TestWriteAll(t *testing.T) {
 	t.Run("write all bytes successfully", func(t *testing.T) {
 		// Create a pipe for testing
@@ -364,6 +311,110 @@ type zeroWriteConn struct {
 
 func (c *zeroWriteConn) Write([]byte) (int, error) {
 	return 0, nil
+}
+
+func TestIsTLSConn(t *testing.T) {
+	t.Run("TLS connection returns true", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+		defer ln.Close()
+
+		serverDone := make(chan Conn)
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				serverDone <- nil
+				return
+			}
+			// Perform handshake by reading/writing
+			buf := make([]byte, 1)
+			conn.Read(buf)
+			serverDone <- conn
+		}()
+
+		clientConfig := &tls.Config{InsecureSkipVerify: true}
+		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
+
+		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Trigger handshake completion
+		conn.Write([]byte{0x00})
+
+		assert.True(t, IsTLSConn(conn), "TLS dialer connection should be TLS")
+
+		serverConn := <-serverDone
+		if serverConn != nil {
+			defer serverConn.Close()
+			assert.True(t, IsTLSConn(serverConn), "TLS listener connection should be TLS")
+		}
+	})
+
+	t.Run("TCP connection returns false", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+		defer ln.Close()
+
+		go func() {
+			conn, _ := ln.Accept()
+			if conn != nil {
+				conn.Close()
+			}
+		}()
+
+		dialer := &TCPDialer{Timeout: 5 * time.Second}
+		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		assert.False(t, IsTLSConn(conn), "TCP connection should not be TLS")
+	})
+}
+
+func TestTLSConnInterface(t *testing.T) {
+	t.Run("tlsConn implements TLSConn interface", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err == nil {
+				buf := make([]byte, 1)
+				conn.Read(buf)
+				conn.Close()
+			}
+		}()
+
+		clientConfig := &tls.Config{InsecureSkipVerify: true}
+		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
+
+		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Verify it implements TLSConn
+		tlsConn, ok := conn.(TLSConn)
+		require.True(t, ok, "should implement TLSConn interface")
+
+		// Verify ConnectionState works
+		state := tlsConn.ConnectionState()
+		assert.True(t, state.HandshakeComplete, "handshake should be complete")
+
+		conn.Write([]byte{0x00})
+	})
 }
 
 // generateTestCertificate generates a self-signed certificate for testing.

@@ -22,6 +22,7 @@ type Client struct {
 	timeout       time.Duration
 	singleConnect bool
 	maxBodyLength uint32
+	tlsMode       bool // RFC 9887: when true, use unencrypted flag and skip obfuscation
 }
 
 // ClientOption is a function that configures a Client.
@@ -56,12 +57,43 @@ func WithSecretBytes(secret []byte) ClientOption {
 }
 
 // WithTLSConfig sets the TLS configuration for secure connections.
+// Note: For RFC 9887 compliance, use WithTLS13Config instead.
 func WithTLSConfig(config *tls.Config) ClientOption {
 	return func(c *Client) {
 		c.dialer = &TLSDialer{
 			Timeout: c.timeout,
 			Config:  config,
 		}
+	}
+}
+
+// WithTLS13Config sets the TLS 1.3 configuration for RFC 9887 compliant connections.
+// When using RFC 9887 mode, the unencrypted flag is automatically set and
+// packet obfuscation is disabled since TLS provides encryption.
+// This function enforces TLS 1.3 as required by RFC 9887.
+// If config is nil, a default TLS 1.3 configuration is used.
+func WithTLS13Config(config *tls.Config) ClientOption {
+	return func(c *Client) {
+		var cfg *tls.Config
+		if config == nil {
+			cfg = &tls.Config{}
+		} else {
+			// Clone config to avoid modifying the original
+			cfg = config.Clone()
+		}
+
+		// RFC 9887 requires TLS 1.3
+		cfg.MinVersion = tls.VersionTLS13
+		// Ensure MaxVersion is not below MinVersion
+		if cfg.MaxVersion != 0 && cfg.MaxVersion < tls.VersionTLS13 {
+			cfg.MaxVersion = tls.VersionTLS13
+		}
+
+		c.dialer = &TLSDialer{
+			Timeout: c.timeout,
+			Config:  cfg,
+		}
+		c.tlsMode = true
 	}
 }
 
@@ -169,8 +201,23 @@ func (c *Client) sendPacket(header *Header, body []byte) error {
 		header.SetSingleConnect(true)
 	}
 
-	// Obfuscate body
-	obfuscatedBody := Obfuscate(header, c.secret, body)
+	// Check if connection is actually TLS-secured
+	// Security: Only use TLS mode if the connection is actually TLS,
+	// not just based on tlsMode flag (prevents sending unencrypted data
+	// if tlsMode was set but a non-TLS dialer was used)
+	isTLS := IsTLSConn(c.conn)
+
+	// RFC 9887: Set unencrypted flag when using TLS
+	// TLS provides encryption, so packet obfuscation is not needed
+	if isTLS {
+		header.SetUnencrypted(true)
+	}
+
+	// Obfuscate body (skipped if unencrypted flag is set or using TLS)
+	obfuscatedBody := body
+	if !isTLS {
+		obfuscatedBody = Obfuscate(header, c.secret, body)
+	}
 
 	// Marshal header
 	headerData, err := header.MarshalBinary()
@@ -232,6 +279,16 @@ func (c *Client) recvPacket() (*Header, []byte, error) {
 		return nil, nil, fmt.Errorf("%w: body length %d exceeds maximum %d", ErrBodyTooLarge, header.Length, c.maxBodyLength)
 	}
 
+	// Check if connection is actually TLS-secured
+	// Security: Only use TLS mode if the connection is actually TLS
+	isTLS := IsTLSConn(c.conn)
+
+	// RFC 9887: On TLS connections, the unencrypted flag MUST be set.
+	// Reject packets without the flag when using TLS.
+	if isTLS && !header.IsUnencrypted() {
+		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
+	}
+
 	// Read body
 	var body []byte
 	if header.Length > 0 {
@@ -240,8 +297,10 @@ func (c *Client) recvPacket() (*Header, []byte, error) {
 			return nil, nil, fmt.Errorf("failed to read body: %w", err)
 		}
 
-		// Obfuscate body
-		body = Obfuscate(header, c.secret, body)
+		// Deobfuscate body (skipped if using TLS per RFC 9887)
+		if !isTLS {
+			body = Obfuscate(header, c.secret, body)
+		}
 	}
 
 	return header, body, nil
@@ -752,4 +811,19 @@ func (c *Client) RemoteAddr() net.Addr {
 		return nil
 	}
 	return c.conn.RemoteAddr()
+}
+
+// IsTLSMode returns true if the client is using RFC 9887 TLS mode.
+func (c *Client) IsTLSMode() bool {
+	return c.tlsMode
+}
+
+// IsTLSConnection returns true if the current connection is TLS-secured.
+func (c *Client) IsTLSConnection() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return false
+	}
+	return IsTLSConn(c.conn)
 }

@@ -15,6 +15,14 @@ type Conn interface {
 	net.Conn
 }
 
+// TLSConn represents a TLS-secured connection.
+// Use IsTLSConn to check if a Conn is TLS-secured.
+type TLSConn interface {
+	Conn
+	// ConnectionState returns the TLS connection state.
+	ConnectionState() tls.ConnectionState
+}
+
 // Listener represents a network listener for accepting TACACS+ connections.
 type Listener interface {
 	// Accept waits for and returns the next connection to the listener.
@@ -38,6 +46,62 @@ type tcpConn struct {
 	net.Conn
 }
 
+// tlsConn wraps a *tls.Conn to implement TLSConn interface.
+type tlsConn struct {
+	conn *tls.Conn
+}
+
+// Read reads data from the connection.
+func (c *tlsConn) Read(b []byte) (int, error) {
+	return c.conn.Read(b)
+}
+
+// Write writes data to the connection.
+func (c *tlsConn) Write(b []byte) (int, error) {
+	return c.conn.Write(b)
+}
+
+// Close closes the connection.
+func (c *tlsConn) Close() error {
+	return c.conn.Close()
+}
+
+// LocalAddr returns the local network address.
+func (c *tlsConn) LocalAddr() net.Addr {
+	return c.conn.LocalAddr()
+}
+
+// RemoteAddr returns the remote network address.
+func (c *tlsConn) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
+
+// SetDeadline sets the read and write deadlines.
+func (c *tlsConn) SetDeadline(t time.Time) error {
+	return c.conn.SetDeadline(t)
+}
+
+// SetReadDeadline sets the read deadline.
+func (c *tlsConn) SetReadDeadline(t time.Time) error {
+	return c.conn.SetReadDeadline(t)
+}
+
+// SetWriteDeadline sets the write deadline.
+func (c *tlsConn) SetWriteDeadline(t time.Time) error {
+	return c.conn.SetWriteDeadline(t)
+}
+
+// ConnectionState returns the TLS connection state.
+func (c *tlsConn) ConnectionState() tls.ConnectionState {
+	return c.conn.ConnectionState()
+}
+
+// IsTLSConn returns true if the connection is TLS-secured.
+func IsTLSConn(conn Conn) bool {
+	_, ok := conn.(TLSConn)
+	return ok
+}
+
 // tcpListener wraps a net.Listener to implement Listener interface.
 type tcpListener struct {
 	net.Listener
@@ -50,6 +114,25 @@ func (l *tcpListener) Accept() (Conn, error) {
 		return nil, err
 	}
 	return &tcpConn{Conn: conn}, nil
+}
+
+// tlsListener wraps a net.Listener for TLS connections.
+type tlsListener struct {
+	net.Listener
+}
+
+// Accept accepts a TLS connection from the listener.
+func (l *tlsListener) Accept() (Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("expected TLS connection")
+	}
+	return &tlsConn{conn: tc}, nil
 }
 
 // TCPDialer implements Dialer for TCP connections.
@@ -100,7 +183,12 @@ func (d *TLSDialer) Dial(ctx context.Context, network, address string) (Conn, er
 	if err != nil {
 		return nil, err
 	}
-	return &tcpConn{Conn: conn}, nil
+	tc, ok := conn.(*tls.Conn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("expected TLS connection")
+	}
+	return &tlsConn{conn: tc}, nil
 }
 
 // ListenTCP creates a TCP listener on the specified address.
@@ -117,24 +205,16 @@ func ListenTLS(address string, config *tls.Config) (Listener, error) {
 	if config == nil {
 		return nil, fmt.Errorf("TLS config is required")
 	}
-	ln, err := tls.Listen("tcp", address, config)
+	cfg := config.Clone()
+	// RFC 9887: enforce TLS 1.3 for TACACS+ over TLS listeners.
+	cfg.MinVersion = tls.VersionTLS13
+	cfg.MaxVersion = tls.VersionTLS13
+
+	ln, err := tls.Listen("tcp", address, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", address, err)
 	}
-	return &tcpListener{Listener: ln}, nil
-}
-
-// NewTLSConfig creates a TLS config for TACACS+ connections.
-// This is a helper function to create a basic TLS configuration.
-func NewTLSConfig(certFile, keyFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load certificate: %w", err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}, nil
+	return &tlsListener{Listener: ln}, nil
 }
 
 // writeAll writes all bytes to the connection, handling partial writes.
