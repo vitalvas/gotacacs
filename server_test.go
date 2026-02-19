@@ -1620,3 +1620,216 @@ func TestServerInvalidPackets(t *testing.T) {
 		assert.Equal(t, uint8(AcctStatusError), reply.Status)
 	})
 }
+
+func TestServerSecretRotation(t *testing.T) {
+	// rotationProvider returns a SecretProvider that supports secret rotation.
+	// secrets is the ordered list of secrets to try.
+	rotationProvider := func(secrets []string, userData map[string]string) SecretProvider {
+		return SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			return SecretResponse{
+				Secret:   []byte(secrets[req.Attempt]),
+				UserData: userData,
+				Attempts: len(secrets),
+			}
+		})
+	}
+
+	t.Run("rotation succeeds with secondary secret", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client uses the new secret
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+
+	t.Run("rotation succeeds with primary secret", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client uses the old (primary) secret - should succeed on first attempt
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("oldsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+
+	t.Run("all secrets fail", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client uses a completely wrong secret - server responds with first secret,
+		// so the client can't deobfuscate the response and gets an error
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
+		_, err = client.Authenticate(context.Background(), "testuser", "password")
+		assert.Error(t, err)
+	})
+
+	t.Run("attempts zero backward compatible", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		// Provider returns Attempts=0 (backward compatible)
+		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
+			return SecretResponse{
+				Secret:   []byte("testsecret"),
+				Attempts: 0,
+			}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+
+	t.Run("single connect uses resolved secret", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Use single-connect mode with the secondary secret
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithSecret("newsecret"),
+			WithSingleConnect(true),
+		)
+		defer client.Close()
+
+		// Multiple requests should all work using the resolved secret
+		for range 3 {
+			reply, err := client.Authenticate(context.Background(), "testuser", "password")
+			require.NoError(t, err)
+			assert.True(t, reply.IsPass())
+		}
+	})
+
+	t.Run("provider attempt values correct", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		var receivedAttempts []int
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			receivedAttempts = append(receivedAttempts, req.Attempt)
+			secrets := []string{"oldsecret", "newsecret"}
+			return SecretResponse{
+				Secret:   []byte(secrets[req.Attempt]),
+				Attempts: len(secrets),
+			}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Client uses secondary secret - provider should be called with attempt 0 then 1
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		// Wait for connection handling to complete
+		time.Sleep(50 * time.Millisecond)
+
+		// Attempt 0 is called in handleConnection setup, attempt 1 during rotation
+		assert.Equal(t, []int{0, 1}, receivedAttempts)
+	})
+
+	t.Run("rotation with authorization", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
+		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsPass())
+		assert.Contains(t, resp.GetArgs(), "priv-lvl=15")
+	})
+
+	t.Run("rotation with accounting", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(rotationProvider([]string{"oldsecret", "newsecret"}, nil)),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
+		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
+		require.NoError(t, err)
+		assert.True(t, reply.IsSuccess())
+	})
+}

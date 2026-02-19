@@ -337,11 +337,13 @@ Use `SecretProviderFunc` for per-client secrets and custom user data:
 type SecretRequest struct {
     RemoteAddr net.Addr  // Client address
     LocalAddr  net.Addr  // Server address
+    Attempt    int       // 0-based secret attempt index (for rotation)
 }
 
 type SecretResponse struct {
     Secret   []byte             // Shared secret for obfuscation
     UserData map[string]string  // Custom data passed to handlers
+    Attempts int                // Total secrets available (0 or 1 = no rotation)
 }
 
 type SecretProvider interface {
@@ -392,6 +394,31 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
     // ...
 }
 ```
+
+### Secret Rotation
+
+During secret rotation, the server needs to accept both old and new secrets simultaneously. Set `SecretResponse.Attempts` to the total number of available secrets. The server calls `GetSecret` with increasing `SecretRequest.Attempt` values (0, 1, 2, ...) until one succeeds or all fail.
+
+The secret is resolved on the first packet of a connection and reused for the entire connection lifetime, including single-connect mode with multiple sessions.
+
+```go
+secrets := map[string][]string{
+    "10.0.0.1": {"newsecret", "oldsecret"},
+    "10.0.0.2": {"onlysecret"},
+}
+
+secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+    host, _, _ := net.SplitHostPort(req.RemoteAddr.String())
+    clientSecrets := secrets[host]
+
+    return gotacacs.SecretResponse{
+        Secret:   []byte(clientSecrets[req.Attempt]),
+        Attempts: len(clientSecrets),
+    }
+})
+```
+
+When `Attempts` is 0 or 1, the server uses the single-secret fast path with no behavioral change from previous versions.
 
 ## TLS Configuration (RFC 9887)
 

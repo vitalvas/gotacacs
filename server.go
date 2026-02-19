@@ -16,6 +16,10 @@ type SecretRequest struct {
 	RemoteAddr net.Addr
 	// LocalAddr is the local address of the server connection.
 	LocalAddr net.Addr
+	// Attempt is the 0-based secret attempt index for secret rotation.
+	// The server calls GetSecret multiple times with increasing Attempt values
+	// when the first secret fails to deobfuscate the packet.
+	Attempt int
 }
 
 // SecretResponse contains the secret and optional user data for a client.
@@ -25,6 +29,11 @@ type SecretResponse struct {
 	Secret []byte
 	// UserData is optional metadata passed to handlers.
 	UserData map[string]string
+	// Attempts is the total number of secrets available for rotation.
+	// A value of 0 or 1 means no rotation (single secret).
+	// When greater than 1, the server will try each secret in order
+	// on the first packet of a connection until one succeeds.
+	Attempts int
 }
 
 // SecretProvider provides per-client shared secrets and optional user data.
@@ -355,10 +364,14 @@ func (s *Server) handleConnection(conn Conn) {
 	secretResp := s.getSecret(ctx, secretReq)
 	secret := secretResp.Secret
 	userData := secretResp.UserData
+	totalAttempts := max(secretResp.Attempts, 0)
 	remoteAddr := secretReq.RemoteAddr
 
 	// RFC 9887: Detect if connection is TLS-secured
 	isTLS := IsTLSConn(conn)
+
+	// Secret rotation: resolved after first packet when multiple secrets are available
+	secretResolved := false
 
 	// Use connection-local session map to prevent cross-client session hijacking
 	// Also mirror to sessionStore for custom store support (metrics, persistence)
@@ -382,12 +395,31 @@ func (s *Server) handleConnection(conn Conn) {
 			conn.SetReadDeadline(time.Now().Add(s.readTimeout))
 		}
 
-		header, body, err := s.readPacket(conn, secret, isTLS)
-		if err != nil {
-			if errors.Is(err, io.EOF) || isNetClosedError(err) {
+		var header *Header
+		var body []byte
+		var err error
+
+		if secretResolved || totalAttempts <= 1 {
+			// Fast path: single secret or already resolved
+			header, body, err = s.readPacket(conn, secret, isTLS)
+			if err != nil {
+				if errors.Is(err, io.EOF) || isNetClosedError(err) {
+					return
+				}
 				return
 			}
-			return
+		} else {
+			// Rotation path: try multiple secrets on the first packet
+			header, body, err = s.readRawPacket(conn, len(secret) > 0, isTLS)
+			if err != nil {
+				if errors.Is(err, io.EOF) || isNetClosedError(err) {
+					return
+				}
+				return
+			}
+
+			body, secret, userData = s.resolveSecret(ctx, conn, header, body, secret, userData, totalAttempts, isTLS)
+			secretResolved = true
 		}
 
 		// Get or create session (scoped to this connection for security)
@@ -484,7 +516,42 @@ func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretRespons
 	return s.secretProvider.GetSecret(ctx, req)
 }
 
-func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
+// resolveSecret tries each secret in order until one successfully deobfuscates and validates
+// the packet. Returns the deobfuscated body and the resolved secret/userData.
+// If all secrets fail, returns the body deobfuscated with the first secret
+// so the handler produces a standard "bad secret" response.
+func (s *Server) resolveSecret(ctx context.Context, conn Conn, header *Header, rawBody, firstSecret []byte, firstUserData map[string]string, totalAttempts int, isTLS bool) (body, secret []byte, userData map[string]string) {
+	for i := range totalAttempts {
+		var attemptSecret []byte
+		var attemptUserData map[string]string
+		if i == 0 {
+			attemptSecret = firstSecret
+			attemptUserData = firstUserData
+		} else {
+			resp := s.getSecret(ctx, SecretRequest{
+				RemoteAddr: conn.RemoteAddr(),
+				LocalAddr:  conn.LocalAddr(),
+				Attempt:    i,
+			})
+			attemptSecret = resp.Secret
+			attemptUserData = resp.UserData
+		}
+
+		deobBody, validateErr := s.deobfuscateAndValidate(header, rawBody, attemptSecret, isTLS)
+		if validateErr == nil || !errors.Is(validateErr, ErrBadSecret) {
+			return deobBody, attemptSecret, attemptUserData
+		}
+	}
+
+	// All secrets failed: deobfuscate with the first secret
+	body = rawBody
+	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(firstSecret) > 0 {
+		body = Obfuscate(header, firstSecret, rawBody)
+	}
+	return body, firstSecret, firstUserData
+}
+
+func (s *Server) readRawPacket(conn Conn, hasSecret, isTLS bool) (*Header, []byte, error) {
 	// Read header
 	headerBuf := make([]byte, HeaderLength)
 	if _, err := io.ReadFull(conn, headerBuf); err != nil {
@@ -509,7 +576,7 @@ func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []by
 
 	// Reject unencrypted flag on non-TLS connections when a secret is configured.
 	// This prevents clients from bypassing obfuscation by setting the flag.
-	if !isTLS && header.IsUnencrypted() && len(secret) > 0 {
+	if !isTLS && header.IsUnencrypted() && hasSecret {
 		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections with shared secret", ErrInvalidPacket)
 	}
 
@@ -527,6 +594,15 @@ func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []by
 		}
 	}
 
+	return header, body, nil
+}
+
+func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
+	header, body, err := s.readRawPacket(conn, len(secret) > 0, isTLS)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Deobfuscate if needed (Obfuscate is symmetric)
 	// RFC 9887: Skip deobfuscation on TLS connections (TLS provides encryption)
 	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
@@ -534,6 +610,25 @@ func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []by
 	}
 
 	return header, body, nil
+}
+
+// deobfuscateAndValidate deobfuscates the raw body with the given secret and validates
+// the result by parsing the packet. Returns the deobfuscated body or an error.
+// Obfuscate() creates a new slice, so rawBody is preserved for retries.
+func (s *Server) deobfuscateAndValidate(header *Header, rawBody, secret []byte, isTLS bool) ([]byte, error) {
+	var body []byte
+	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(secret) > 0 {
+		body = Obfuscate(header, secret, rawBody)
+	} else {
+		body = rawBody
+	}
+
+	_, err := ParsePacket(header, body)
+	if err != nil {
+		return nil, err
+	}
+
+	return body, nil
 }
 
 func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []byte, isTLS bool) error {
