@@ -56,23 +56,12 @@ func WithSecretBytes(secret []byte) ClientOption {
 	}
 }
 
-// WithTLSConfig sets the TLS configuration for secure connections.
-// Note: For RFC 9887 compliance, use WithTLS13Config instead.
-func WithTLSConfig(config *tls.Config) ClientOption {
-	return func(c *Client) {
-		c.dialer = &TLSDialer{
-			Timeout: c.timeout,
-			Config:  config,
-		}
-	}
-}
-
-// WithTLS13Config sets the TLS 1.3 configuration for RFC 9887 compliant connections.
-// When using RFC 9887 mode, the unencrypted flag is automatically set and
+// WithTLSConfig sets the TLS 1.3 configuration for RFC 9887 compliant connections.
+// When using TLS mode, the unencrypted flag is automatically set and
 // packet obfuscation is disabled since TLS provides encryption.
 // This function enforces TLS 1.3 as required by RFC 9887.
 // If config is nil, a default TLS 1.3 configuration is used.
-func WithTLS13Config(config *tls.Config) ClientOption {
+func WithTLSConfig(config *tls.Config) ClientOption {
 	return func(c *Client) {
 		var cfg *tls.Config
 		if config == nil {

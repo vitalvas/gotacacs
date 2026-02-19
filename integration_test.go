@@ -255,7 +255,6 @@ func TestIntegrationTLS(t *testing.T) {
 
 		server := NewServer(
 			WithServerListener(ln),
-			WithServerSecret("sharedsecret"),
 			WithHandler(newTestIntegrationHandler()),
 		)
 
@@ -265,7 +264,6 @@ func TestIntegrationTLS(t *testing.T) {
 
 		clientConfig := &tls.Config{InsecureSkipVerify: true}
 		client := NewClient(WithAddress(ln.Addr().String()),
-			WithSecret("sharedsecret"),
 			WithTLSConfig(clientConfig),
 		)
 
@@ -451,7 +449,7 @@ func TestIntegrationRFC9887TLS13(t *testing.T) {
 
 		client := NewClient(
 			WithAddress(ln.Addr().String()),
-			WithTLS13Config(clientConfig),
+			WithTLSConfig(clientConfig),
 			WithSingleConnect(true), // Keep connection open to verify TLS state
 		)
 		defer client.Close()
@@ -497,7 +495,7 @@ func TestIntegrationRFC9887TLS13(t *testing.T) {
 
 		client := NewClient(
 			WithAddress(ln.Addr().String()),
-			WithTLS13Config(clientConfig),
+			WithTLSConfig(clientConfig),
 		)
 
 		// Authorization
@@ -541,7 +539,7 @@ func TestIntegrationRFC9887TLS13(t *testing.T) {
 
 		client := NewClient(
 			WithAddress(ln.Addr().String()),
-			WithTLS13Config(clientConfig),
+			WithTLSConfig(clientConfig),
 			WithSingleConnect(true),
 		)
 		defer client.Close()
@@ -556,8 +554,8 @@ func TestIntegrationRFC9887TLS13(t *testing.T) {
 }
 
 func TestIntegrationRFC9887BugFixes(t *testing.T) {
-	t.Run("WithTLS13Config enforces TLS 1.3 MinVersion", func(t *testing.T) {
-		// Bug #1: Verify that WithTLS13Config enforces TLS 1.3
+	t.Run("WithTLSConfig enforces TLS 1.3 MinVersion", func(t *testing.T) {
+		// Bug #1: Verify that WithTLSConfig enforces TLS 1.3
 		clientConfig := &tls.Config{
 			InsecureSkipVerify: true,
 			// Intentionally not setting MinVersion to test enforcement
@@ -565,7 +563,7 @@ func TestIntegrationRFC9887BugFixes(t *testing.T) {
 
 		client := NewClient(
 			WithAddress("localhost:300"),
-			WithTLS13Config(clientConfig),
+			WithTLSConfig(clientConfig),
 		)
 
 		// The client should have TLS mode enabled
@@ -574,7 +572,7 @@ func TestIntegrationRFC9887BugFixes(t *testing.T) {
 		// Access the dialer to verify TLS config was modified
 		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
 			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion,
-				"WithTLS13Config should enforce TLS 1.3 MinVersion")
+				"WithTLSConfig should enforce TLS 1.3 MinVersion")
 		}
 	})
 
@@ -600,7 +598,8 @@ func TestIntegrationRFC9887BugFixes(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		// Client forcing TLS 1.2 should be rejected
+		// Client forcing TLS 1.2 should be rejected.
+		// Use WithDialer directly to bypass WithTLSConfig's TLS 1.3 enforcement.
 		clientConfig := &tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			MaxVersion:         tls.VersionTLS12, // Force TLS 1.2
@@ -609,7 +608,7 @@ func TestIntegrationRFC9887BugFixes(t *testing.T) {
 
 		client := NewClient(
 			WithAddress(ln.Addr().String()),
-			WithTLSConfig(clientConfig),
+			WithDialer(&TLSDialer{Config: clientConfig}),
 			WithSecret("test"),
 		)
 
@@ -647,7 +646,7 @@ func TestIntegrationRFC9887BugFixes(t *testing.T) {
 
 		client := NewClient(
 			WithAddress(ln.Addr().String()),
-			WithTLS13Config(clientConfig),
+			WithTLSConfig(clientConfig),
 		)
 
 		reply, err := client.Authenticate(context.Background(), "admin", "admin123")

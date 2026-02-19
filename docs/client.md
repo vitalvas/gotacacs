@@ -27,7 +27,7 @@ client := gotacacs.NewClient(
 | `WithSecret(secret string)` | Shared secret for packet obfuscation | None (unencrypted) |
 | `WithSecretBytes(secret []byte)` | Shared secret as byte slice | None |
 | `WithTimeout(duration time.Duration)` | Connection and operation timeout | 30 seconds |
-| `WithTLSConfig(config *tls.Config)` | TLS configuration for secure connections | None (plain TCP) |
+| `WithTLSConfig(config *tls.Config)` | TLS 1.3 configuration for RFC 9887 compliant connections | None (plain TCP) |
 | `WithDialer(dialer Dialer)` | Custom dialer implementation | TCPDialer |
 | `WithSingleConnect(enabled bool)` | Enable connection reuse | false |
 | `WithMaxBodyLength(length uint32)` | Maximum allowed response body length | 65535 |
@@ -210,7 +210,10 @@ stopReply, err := client.Accounting(ctx, gotacacs.AcctFlagStop, "username", []st
 | `IsSuccess()` | Returns true if accounting record accepted |
 | `IsError()` | Returns true if server returned an error |
 
-## TLS Configuration
+## TLS Configuration (RFC 9887)
+
+When using TLS, the shared secret is not needed as TLS provides encryption.
+The default TLS port for TACACS+ is 300 per RFC 9887.
 
 ### Basic TLS
 
@@ -220,8 +223,7 @@ tlsConfig := &tls.Config{
 }
 
 client := gotacacs.NewClient(
-    gotacacs.WithAddress("tacacs.example.com:49"),
-    gotacacs.WithSecret("sharedsecret"),
+    gotacacs.WithAddress("tacacs.example.com:300"),
     gotacacs.WithTLSConfig(tlsConfig),
 )
 ```
@@ -240,8 +242,7 @@ tlsConfig := &tls.Config{
 }
 
 client := gotacacs.NewClient(
-    gotacacs.WithAddress("tacacs.example.com:49"),
-    gotacacs.WithSecret("sharedsecret"),
+    gotacacs.WithAddress("tacacs.example.com:300"),
     gotacacs.WithTLSConfig(tlsConfig),
 )
 ```
@@ -395,8 +396,7 @@ if err != nil {
 
 ```go
 client := gotacacs.NewClient(
-    gotacacs.WithAddress("tacacs.example.com:49"),
-    gotacacs.WithSecret("sharedsecret"),
+    gotacacs.WithAddress("tacacs.example.com:300"),
     gotacacs.WithTimeout(30*time.Second),
     gotacacs.WithTLSConfig(tlsConfig),
     gotacacs.WithMaxBodyLength(65535),

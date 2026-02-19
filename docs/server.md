@@ -393,26 +393,30 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
 }
 ```
 
-## TLS Configuration
+## TLS Configuration (RFC 9887)
+
+When using TLS, the shared secret is not needed as TLS provides encryption.
+The default TLS port for TACACS+ is 300 per RFC 9887. `ListenTLS` enforces TLS 1.3.
 
 ### Server with TLS
 
 ```go
-// Load certificate and key
-tlsConfig, err := gotacacs.NewTLSConfig("server.crt", "server.key")
+cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
 if err != nil {
     log.Fatal(err)
 }
 
-// Create TLS listener
-ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+}
+
+ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 if err != nil {
     log.Fatal(err)
 }
 
 server := gotacacs.NewServer(
     gotacacs.WithServerListener(ln),
-    gotacacs.WithServerSecret("sharedsecret"),
     gotacacs.WithHandler(handler),
 )
 ```
@@ -437,10 +441,10 @@ tlsConfig := &tls.Config{
     Certificates: []tls.Certificate{cert},
     ClientCAs:    caCertPool,
     ClientAuth:   tls.RequireAndVerifyClientCert,
-    MinVersion:   tls.VersionTLS12,
+    MinVersion:   tls.VersionTLS13,
 }
 
-ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 ```
 
 ## Server Lifecycle
@@ -585,12 +589,16 @@ defer ln.Close()
 ### TLS Listener
 
 ```go
-tlsConfig, err := gotacacs.NewTLSConfig("cert.pem", "key.pem")
+cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 if err != nil {
     log.Fatal(err)
 }
 
-ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+}
+
+ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 if err != nil {
     log.Fatal(err)
 }
@@ -661,18 +669,13 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
 7. **Validate Input**: Always validate user input from requests.
 
 ```go
-ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 if err != nil {
     log.Fatal(err)
 }
 
-secretProvider := gotacacs.SecretProviderFunc(func(remoteAddr net.Addr) ([]byte, map[string]string) {
-    return getClientSecret(remoteAddr), getClientData(remoteAddr)
-})
-
 server := gotacacs.NewServer(
     gotacacs.WithServerListener(ln),
-    gotacacs.WithSecretProvider(secretProvider),
     gotacacs.WithHandler(handler),
     gotacacs.WithServerReadTimeout(30*time.Second),
     gotacacs.WithServerWriteTimeout(30*time.Second),

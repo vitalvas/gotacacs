@@ -72,23 +72,11 @@ func TestNewClient(t *testing.T) {
 
 	t.Run("create with TLS", func(t *testing.T) {
 		tlsConfig := &tls.Config{InsecureSkipVerify: true}
-		client := NewClient(WithAddress("localhost:49"), WithTLSConfig(tlsConfig))
+		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
 		assert.NotNil(t, client.dialer)
 		_, ok := client.dialer.(*TLSDialer)
 		assert.True(t, ok)
-		assert.False(t, client.IsTLSMode(), "WithTLSConfig should not enable RFC 9887 mode")
-	})
-
-	t.Run("create with TLS 1.3 RFC 9887 mode", func(t *testing.T) {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			MaxVersion: tls.VersionTLS13,
-		}
-		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
-		assert.NotNil(t, client.dialer)
-		_, ok := client.dialer.(*TLSDialer)
-		assert.True(t, ok)
-		assert.True(t, client.IsTLSMode(), "WithTLS13Config should enable RFC 9887 mode")
+		assert.True(t, client.IsTLSMode(), "WithTLSConfig should enable RFC 9887 mode")
 	})
 
 	t.Run("create with custom dialer", func(t *testing.T) {
@@ -108,9 +96,9 @@ func TestNewClient(t *testing.T) {
 		assert.Equal(t, uint32(1024), client.maxBodyLength)
 	})
 
-	t.Run("WithTLS13Config with nil config does not panic", func(t *testing.T) {
+	t.Run("WithTLSConfig with nil config does not panic", func(t *testing.T) {
 		assert.NotPanics(t, func() {
-			client := NewClient(WithAddress("localhost:300"), WithTLS13Config(nil))
+			client := NewClient(WithAddress("localhost:300"), WithTLSConfig(nil))
 			assert.True(t, client.IsTLSMode())
 			if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
 				assert.NotNil(t, tlsDialer.Config)
@@ -119,12 +107,12 @@ func TestNewClient(t *testing.T) {
 		})
 	})
 
-	t.Run("WithTLS13Config normalizes MaxVersion below TLS 1.3", func(t *testing.T) {
+	t.Run("WithTLSConfig normalizes MaxVersion below TLS 1.3", func(t *testing.T) {
 		// Config with MaxVersion set to TLS 1.2 (invalid for RFC 9887)
 		tlsConfig := &tls.Config{
 			MaxVersion: tls.VersionTLS12,
 		}
-		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
+		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
 
 		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
 			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion,
@@ -134,12 +122,12 @@ func TestNewClient(t *testing.T) {
 		}
 	})
 
-	t.Run("WithTLS13Config preserves MaxVersion at or above TLS 1.3", func(t *testing.T) {
+	t.Run("WithTLSConfig preserves MaxVersion at or above TLS 1.3", func(t *testing.T) {
 		// Config with MaxVersion already at TLS 1.3
 		tlsConfig := &tls.Config{
 			MaxVersion: tls.VersionTLS13,
 		}
-		client := NewClient(WithAddress("localhost:300"), WithTLS13Config(tlsConfig))
+		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
 
 		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
 			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MaxVersion)

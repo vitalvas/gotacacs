@@ -1,8 +1,10 @@
-// Package main provides an example TACACS+ client.
+// Package main provides an example TACACS+ client using TLS 1.3 (RFC 9887).
 package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"log"
 	"time"
@@ -11,9 +13,17 @@ import (
 )
 
 func main() {
+	addr := flag.String("addr", "localhost:300", "server address")
+	insecure := flag.Bool("insecure", false, "skip TLS certificate verification")
+	flag.Parse()
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: *insecure,
+	}
+
 	client := gotacacs.NewClient(
-		gotacacs.WithAddress("localhost:49"),
-		gotacacs.WithSecret("secret"),
+		gotacacs.WithAddress(*addr),
+		gotacacs.WithTLSConfig(tlsConfig),
 		gotacacs.WithTimeout(30*time.Second),
 	)
 

@@ -1,8 +1,10 @@
-// Package main provides an example TACACS+ server.
+// Package main provides an example TACACS+ server using TLS 1.3 (RFC 9887).
 package main
 
 import (
 	"context"
+	"crypto/tls"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +15,11 @@ import (
 )
 
 func main() {
+	addr := flag.String("addr", ":300", "listen address")
+	certFile := flag.String("cert", "server.crt", "TLS certificate file")
+	keyFile := flag.String("key", "server.key", "TLS private key file")
+	flag.Parse()
+
 	users := map[string]string{
 		"admin": "admin123",
 		"user":  "user123",
@@ -20,25 +27,24 @@ func main() {
 
 	handler := &exampleHandler{users: users}
 
-	listener, err := gotacacs.ListenTCP(":49")
+	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
-		log.Fatalf("Failed to start listener: %v", err)
+		log.Fatalf("Failed to load TLS certificate: %v", err)
 	}
 
-	log.Println("Starting TACACS+ server on :49")
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
 
-	secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
-		return gotacacs.SecretResponse{
-			Secret: []byte("secret"),
-			UserData: map[string]string{
-				"client_ip": req.RemoteAddr.String(),
-			},
-		}
-	})
+	listener, err := gotacacs.ListenTLS(*addr, tlsConfig)
+	if err != nil {
+		log.Fatalf("Failed to start TLS listener: %v", err)
+	}
+
+	log.Printf("Starting TACACS+ TLS server on %s", *addr)
 
 	server := gotacacs.NewServer(
 		gotacacs.WithServerListener(listener),
-		gotacacs.WithSecretProvider(secretProvider),
 		gotacacs.WithHandler(handler),
 		gotacacs.WithServerReadTimeout(30*time.Second),
 		gotacacs.WithServerWriteTimeout(30*time.Second),
@@ -69,7 +75,7 @@ func (h *exampleHandler) HandleAuthenStart(_ context.Context, req *gotacacs.Auth
 	user := string(req.Start.User)
 	password := string(req.Start.Data)
 
-	log.Printf("Authentication: user=%s from=%s userData=%v", user, req.RemoteAddr, req.UserData)
+	log.Printf("Authentication: user=%s from=%s", user, req.RemoteAddr)
 
 	expectedPass, ok := h.users[user]
 	if !ok || password != expectedPass {
@@ -92,7 +98,7 @@ func (h *exampleHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.Aut
 func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
 	user := string(req.Request.User)
 
-	log.Printf("Authorization: user=%s args=%v from=%s userData=%v", user, req.Request.GetArgs(), req.RemoteAddr, req.UserData)
+	log.Printf("Authorization: user=%s args=%v from=%s", user, req.Request.GetArgs(), req.RemoteAddr)
 
 	if _, ok := h.users[user]; !ok {
 		return &gotacacs.AuthorResponse{
@@ -110,7 +116,7 @@ func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.Au
 func (h *exampleHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
 	user := string(req.Request.User)
 
-	log.Printf("Accounting: user=%s args=%v from=%s userData=%v", user, req.Request.GetArgs(), req.RemoteAddr, req.UserData)
+	log.Printf("Accounting: user=%s args=%v from=%s", user, req.Request.GetArgs(), req.RemoteAddr)
 
 	return &gotacacs.AcctReply{Status: gotacacs.AcctStatusSuccess}
 }

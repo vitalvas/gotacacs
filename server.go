@@ -441,12 +441,15 @@ func (s *Server) handleConnection(conn Conn) {
 			return
 		}
 
-		// Build response header
+		// Build response header.
+		// Only copy FlagSingleConnect from the client request.
+		// FlagUnencrypted is set by writePacket based on actual TLS state,
+		// preventing clients from bypassing obfuscation on non-TLS connections.
 		respHeader := &Header{
 			Version:   header.Version,
 			Type:      respType,
 			SeqNo:     seqNo,
-			Flags:     header.Flags,
+			Flags:     header.Flags & FlagSingleConnect,
 			SessionID: header.SessionID,
 			Length:    uint32(len(respBody)),
 		}
@@ -502,6 +505,12 @@ func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []by
 	// Reject packets without the flag when using TLS.
 	if isTLS && !header.IsUnencrypted() {
 		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
+	}
+
+	// Reject unencrypted flag on non-TLS connections when a secret is configured.
+	// This prevents clients from bypassing obfuscation by setting the flag.
+	if !isTLS && header.IsUnencrypted() && len(secret) > 0 {
+		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections with shared secret", ErrInvalidPacket)
 	}
 
 	// Validate body length to prevent memory exhaustion

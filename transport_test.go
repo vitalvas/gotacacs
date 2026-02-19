@@ -65,6 +65,7 @@ func TestTLSDialer(t *testing.T) {
 
 		serverConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
 		}
 
 		// Start TLS server
@@ -87,6 +88,7 @@ func TestTLSDialer(t *testing.T) {
 
 		clientConfig := &tls.Config{
 			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS13,
 		}
 		dialer := &TLSDialer{
 			Timeout: 5 * time.Second,
@@ -104,7 +106,7 @@ func TestTLSDialer(t *testing.T) {
 	t.Run("dial TLS connection refused", func(t *testing.T) {
 		dialer := &TLSDialer{
 			Timeout: 1 * time.Second,
-			Config:  &tls.Config{InsecureSkipVerify: true},
+			Config:  &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13},
 		}
 		_, err := dialer.Dial(context.Background(), "tcp", "127.0.0.1:1")
 		assert.Error(t, err)
@@ -339,7 +341,7 @@ func TestIsTLSConn(t *testing.T) {
 			serverDone <- conn
 		}()
 
-		clientConfig := &tls.Config{InsecureSkipVerify: true}
+		clientConfig := &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}
 		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
 
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
@@ -398,7 +400,7 @@ func TestTLSConnInterface(t *testing.T) {
 			}
 		}()
 
-		clientConfig := &tls.Config{InsecureSkipVerify: true}
+		clientConfig := &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}
 		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
 
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())

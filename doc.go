@@ -112,26 +112,22 @@
 //
 // The UserData map is available in all handler request contexts via req.UserData.
 //
-// # TLS Support
+// # TLS Support (RFC 9887)
 //
-// Both client and server support TLS for secure communication:
+// Both client and server support TLS 1.3 for secure communication.
+// When using TLS, the shared secret is not needed as TLS provides encryption:
 //
 //	// Client with TLS
 //	tlsConfig := &tls.Config{
 //		RootCAs: certPool,
 //	}
 //	client := gotacacs.NewClient(
-//		gotacacs.WithAddress("tacacs.example.com:49"),
-//		gotacacs.WithSecret("sharedsecret"),
+//		gotacacs.WithAddress("tacacs.example.com:300"),
 //		gotacacs.WithTLSConfig(tlsConfig),
 //	)
 //
 //	// Server with TLS
-//	tlsConfig, err := gotacacs.NewTLSConfig("cert.pem", "key.pem")
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	ln, err := gotacacs.ListenTLS(":49", tlsConfig)
+//	ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 //
 // # Single-Connect Mode
 //

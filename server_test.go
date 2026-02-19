@@ -1524,6 +1524,56 @@ func TestServerInvalidPackets(t *testing.T) {
 		assert.Equal(t, uint8(AuthenStatusError), errReply.Status)
 	})
 
+	t.Run("reject unencrypted flag on non-TLS connection", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Send packet with FlagUnencrypted set on a non-TLS connection.
+		// Server must reject this to prevent obfuscation bypass.
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		start := &AuthenStart{
+			Action:     AuthenActionLogin,
+			AuthenType: AuthenTypePAP,
+			Service:    AuthenServiceLogin,
+			User:       []byte("admin"),
+			Data:       []byte("password"),
+		}
+		startBody, _ := start.MarshalBinary()
+
+		header := &Header{
+			Version:   0xc0,
+			Type:      PacketTypeAuthen,
+			SeqNo:     1,
+			Flags:     FlagUnencrypted, // malicious: bypass obfuscation
+			SessionID: 99999,
+			Length:    uint32(len(startBody)),
+		}
+
+		// Send body without obfuscation (matching the unencrypted flag)
+		headerData, _ := header.MarshalBinary()
+		conn.Write(headerData)
+		conn.Write(startBody)
+
+		// Server should close the connection without sending a response
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, HeaderLength)
+		_, err = io.ReadFull(conn, buf)
+		assert.Error(t, err, "server should reject unencrypted flag on non-TLS connection")
+	})
+
 	t.Run("invalid authorization packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
 		require.NoError(t, err)
