@@ -2401,3 +2401,191 @@ func TestServerHooks(t *testing.T) {
 		assert.True(t, reply.IsPass())
 	})
 }
+
+func TestServerMiddleware(t *testing.T) {
+	t.Run("single middleware intercepts authen", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		middlewareCalled := make(chan bool, 1)
+		mw := func(next Handler) Handler {
+			return &loggingMiddleware{MiddlewareHandler: MiddlewareHandler{Next: next}, ch: middlewareCalled}
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithMiddleware(mw),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+		assert.True(t, <-middlewareCalled)
+	})
+
+	t.Run("middleware ordering", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		orderCh := make(chan int, 3)
+
+		makeMW := func(id int) Middleware {
+			return func(next Handler) Handler {
+				return &orderMiddleware{MiddlewareHandler: MiddlewareHandler{Next: next}, id: id, ch: orderCh}
+			}
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithMiddleware(makeMW(1), makeMW(2), makeMW(3)),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		assert.Equal(t, 1, <-orderCh)
+		assert.Equal(t, 2, <-orderCh)
+		assert.Equal(t, 3, <-orderCh)
+	})
+
+	t.Run("middleware short-circuit", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		mw := func(next Handler) Handler {
+			return &shortCircuitMiddleware{MiddlewareHandler: MiddlewareHandler{Next: next}}
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithMiddleware(mw),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsFail())
+	})
+
+	t.Run("middleware wraps all handler types", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		calls := make(chan string, 4)
+		mw := func(next Handler) Handler {
+			return &allTypesMiddleware{MiddlewareHandler: MiddlewareHandler{Next: next}, calls: calls}
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithMiddleware(mw),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+
+		client.Authenticate(context.Background(), "testuser", "password")
+		assert.Equal(t, "authen_start", <-calls)
+
+		client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+		assert.Equal(t, "author", <-calls)
+
+		client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
+		assert.Equal(t, "acct", <-calls)
+	})
+
+	t.Run("no middleware passthrough", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+}
+
+type loggingMiddleware struct {
+	MiddlewareHandler
+	ch chan bool
+}
+
+func (m *loggingMiddleware) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	m.ch <- true
+	return m.Next.HandleAuthenStart(ctx, req)
+}
+
+type orderMiddleware struct {
+	MiddlewareHandler
+	id int
+	ch chan int
+}
+
+func (m *orderMiddleware) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	m.ch <- m.id
+	return m.Next.HandleAuthenStart(ctx, req)
+}
+
+type shortCircuitMiddleware struct {
+	MiddlewareHandler
+}
+
+func (m *shortCircuitMiddleware) HandleAuthenStart(_ context.Context, _ *AuthenRequest) *AuthenReply {
+	return &AuthenReply{Status: AuthenStatusFail, ServerMsg: []byte("blocked by middleware")}
+}
+
+type allTypesMiddleware struct {
+	MiddlewareHandler
+	calls chan string
+}
+
+func (m *allTypesMiddleware) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	m.calls <- "authen_start"
+	return m.Next.HandleAuthenStart(ctx, req)
+}
+
+func (m *allTypesMiddleware) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
+	m.calls <- "author"
+	return m.Next.HandleAuthorRequest(ctx, req)
+}
+
+func (m *allTypesMiddleware) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
+	m.calls <- "acct"
+	return m.Next.HandleAcctRequest(ctx, req)
+}

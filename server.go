@@ -196,6 +196,72 @@ type ServerHooks struct {
 	OnPacketError  func(event PacketErrorEvent)
 }
 
+// composedHandler combines separate handler interfaces into a single Handler.
+// Methods return error responses when the corresponding handler is nil.
+type composedHandler struct {
+	authen AuthenticationHandler
+	author AuthorizationHandler
+	acct   AccountingHandler
+}
+
+func (h *composedHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	if h.authen == nil {
+		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
+	}
+	return h.authen.HandleAuthenStart(ctx, req)
+}
+
+func (h *composedHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
+	if h.authen == nil {
+		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
+	}
+	return h.authen.HandleAuthenContinue(ctx, req)
+}
+
+func (h *composedHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
+	if h.author == nil {
+		return &AuthorResponse{Status: AuthorStatusError, ServerMsg: []byte("no authorization handler configured")}
+	}
+	return h.author.HandleAuthorRequest(ctx, req)
+}
+
+func (h *composedHandler) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
+	if h.acct == nil {
+		return &AcctReply{Status: AcctStatusError, ServerMsg: []byte("no accounting handler configured")}
+	}
+	return h.acct.HandleAcctRequest(ctx, req)
+}
+
+// Middleware wraps a Handler to intercept any of the four request methods.
+// The middleware receives the next handler in the chain and returns a new handler.
+type Middleware func(next Handler) Handler
+
+// MiddlewareHandler delegates all Handler methods to the next handler.
+// Embed this in middleware implementations to only override the methods you need.
+type MiddlewareHandler struct {
+	Next Handler
+}
+
+// HandleAuthenStart delegates to the next handler.
+func (m *MiddlewareHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+	return m.Next.HandleAuthenStart(ctx, req)
+}
+
+// HandleAuthenContinue delegates to the next handler.
+func (m *MiddlewareHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
+	return m.Next.HandleAuthenContinue(ctx, req)
+}
+
+// HandleAuthorRequest delegates to the next handler.
+func (m *MiddlewareHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
+	return m.Next.HandleAuthorRequest(ctx, req)
+}
+
+// HandleAcctRequest delegates to the next handler.
+func (m *MiddlewareHandler) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
+	return m.Next.HandleAcctRequest(ctx, req)
+}
+
 // ServerOption configures a Server.
 type ServerOption func(*Server)
 
@@ -236,6 +302,14 @@ func WithServerSecretBytes(secret []byte) ServerOption {
 func WithServerHooks(hooks ServerHooks) ServerOption {
 	return func(s *Server) {
 		s.hooks = hooks
+	}
+}
+
+// WithMiddleware appends middleware to the server's middleware chain.
+// Middlewares are applied in order: first added = outermost (runs first).
+func WithMiddleware(middlewares ...Middleware) ServerOption {
+	return func(s *Server) {
+		s.middlewares = append(s.middlewares, middlewares...)
 	}
 }
 
@@ -289,12 +363,14 @@ type Server struct {
 	listener       Listener
 	secretProvider SecretProvider
 	hooks          ServerHooks
+	middlewares    []Middleware
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	maxBodyLength  uint32
 	authenHandler  AuthenticationHandler
 	authorHandler  AuthorizationHandler
 	acctHandler    AccountingHandler
+	handler        Handler
 
 	running        bool
 	shutdownCh     chan struct{}
@@ -314,6 +390,18 @@ func NewServer(opts ...ServerOption) *Server {
 
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	// Build combined handler from individual handlers
+	s.handler = &composedHandler{
+		authen: s.authenHandler,
+		author: s.authorHandler,
+		acct:   s.acctHandler,
+	}
+
+	// Apply middleware chain (first added = outermost)
+	for i := len(s.middlewares) - 1; i >= 0; i-- {
+		s.handler = s.middlewares[i](s.handler)
 	}
 
 	return s
@@ -564,8 +652,8 @@ func (s *Server) handleConnection(conn Conn) {
 	localSessions := make(map[uint32]*Session)
 	trackingIDs := make(map[uint32]uint64)
 	defer func() {
-		for _, trackingID := range trackingIDs {
-			s.activeSessions.Delete(trackingID)
+		for sessionID := range localSessions {
+			s.cleanupSession(sessionID, localSessions, trackingIDs)
 		}
 		s.fireDisconnect(remoteAddr, localAddr)
 	}()
@@ -589,12 +677,14 @@ func (s *Server) handleConnection(conn Conn) {
 			var err error
 			header, body, err = s.readPacket(conn, secret, isTLS)
 			if err != nil {
+				s.fireReadError(err, remoteAddr, localAddr)
 				return
 			}
 		} else {
 			var err error
 			header, body, err = s.readRawPacket(conn, len(secret) > 0, isTLS)
 			if err != nil {
+				s.fireReadError(err, remoteAddr, localAddr)
 				return
 			}
 			body, secret, userData = s.resolveSecret(ctx, secretReq, header, body, secret, userData, totalAttempts, isTLS)
@@ -910,6 +1000,23 @@ func (s *Server) fireDisconnect(remoteAddr, localAddr net.Addr) {
 	}
 }
 
+func (s *Server) fireReadError(err error, remoteAddr, localAddr net.Addr) {
+	if isProtocolError(err) {
+		s.firePacketError(remoteAddr, localAddr, err)
+	}
+}
+
+// isProtocolError returns true if the error is a TACACS+ protocol-level error
+// (invalid header, invalid packet, body too large) rather than a transport-level
+// error (timeout, connection reset, EOF).
+func isProtocolError(err error) bool {
+	return errors.Is(err, ErrInvalidHeader) ||
+		errors.Is(err, ErrInvalidPacket) ||
+		errors.Is(err, ErrInvalidVersion) ||
+		errors.Is(err, ErrInvalidType) ||
+		errors.Is(err, ErrBodyTooLarge)
+}
+
 func (s *Server) fireBadSecret(remoteAddr, localAddr net.Addr) {
 	if s.hooks.OnBadSecret != nil {
 		s.hooks.OnBadSecret(BadSecretEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr})
@@ -949,15 +1056,12 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	if resp, ptype, handled := s.handleUnmarshalError(start.UnmarshalBinary(body), remoteAddr, localAddr, "invalid START packet"); handled {
 		return resp, ptype
 	}
-	if s.authenHandler == nil {
-		return s.authenErrorResponse("no authentication handler configured")
-	}
 
 	req := &AuthenRequest{
 		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Start: start, UserData: userData,
 	}
-	reply := s.authenHandler.HandleAuthenStart(ctx, req)
+	reply := s.handler.HandleAuthenStart(ctx, req)
 	if reply == nil {
 		return s.authenErrorResponse("handler returned nil response")
 	}
@@ -970,15 +1074,12 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 	if resp, ptype, handled := s.handleUnmarshalError(cont.UnmarshalBinary(body), remoteAddr, localAddr, "invalid CONTINUE packet"); handled {
 		return resp, ptype
 	}
-	if s.authenHandler == nil {
-		return s.authenErrorResponse("no authentication handler configured")
-	}
 
 	req := &AuthenContinueRequest{
 		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Continue: cont, UserData: userData,
 	}
-	reply := s.authenHandler.HandleAuthenContinue(ctx, req)
+	reply := s.handler.HandleAuthenContinue(ctx, req)
 	if reply == nil {
 		return s.authenErrorResponse("handler returned nil response")
 	}
@@ -1005,16 +1106,12 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 		respBody, respType := s.authorErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
-	if s.authorHandler == nil {
-		respBody, respType := s.authorErrorResponse("no authorization handler configured")
-		return respBody, respType, SessionStateError
-	}
 
 	req := &AuthorRequestContext{
 		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Request: request, UserData: userData,
 	}
-	resp := s.authorHandler.HandleAuthorRequest(ctx, req)
+	resp := s.handler.HandleAuthorRequest(ctx, req)
 	if resp == nil {
 		respBody, respType := s.authorErrorResponse("handler returned nil response")
 		return respBody, respType, SessionStateError
@@ -1048,16 +1145,12 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 		respBody, respType := s.acctErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
-	if s.acctHandler == nil {
-		respBody, respType := s.acctErrorResponse("no accounting handler configured")
-		return respBody, respType, SessionStateError
-	}
 
 	req := &AcctRequestContext{
 		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Request: request, UserData: userData,
 	}
-	resp := s.acctHandler.HandleAcctRequest(ctx, req)
+	resp := s.handler.HandleAcctRequest(ctx, req)
 	if resp == nil {
 		respBody, respType := s.acctErrorResponse("handler returned nil response")
 		return respBody, respType, SessionStateError

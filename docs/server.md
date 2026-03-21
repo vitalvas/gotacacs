@@ -43,6 +43,7 @@ if err := server.Serve(); err != nil {
 | `WithServerReadTimeout(duration)` | Read timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
 | `WithServerHooks(hooks)` | Lifecycle event hooks | None |
+| `WithMiddleware(middlewares...)` | Handler middleware chain | None |
 
 ## Handler Interface
 
@@ -643,7 +644,7 @@ type ServerHooks struct {
 
 | Event | Fields | When |
 |-------|--------|------|
-| `ConnectEvent` | `RemoteAddr`, `LocalAddr`, `TLSState` | After TLS handshake and secret resolution |
+| `ConnectEvent` | `RemoteAddr`, `LocalAddr`, `TLSState` | After TLS handshake and initial secret lookup (before rotation is resolved) |
 | `DisconnectEvent` | `RemoteAddr`, `LocalAddr` | Connection closing |
 | `SessionEvent` | `SessionInfo` (embedded) | Session start and end |
 | `BadSecretEvent` | `RemoteAddr`, `LocalAddr` | All rotation secrets fail, or single secret mismatch |
@@ -669,6 +670,52 @@ server := gotacacs.NewServer(
     }),
 )
 ```
+
+## Middleware
+
+Middleware wraps the `Handler` interface to intercept any of the four request methods (HandleAuthenStart, HandleAuthenContinue, HandleAuthorRequest, HandleAcctRequest). Middlewares are applied in order: first added = outermost (runs first).
+
+```go
+type Middleware func(next Handler) Handler
+```
+
+### MiddlewareHandler
+
+Embed `MiddlewareHandler` to delegate all methods to the next handler by default. Override only the methods you need:
+
+```go
+type rateLimitMiddleware struct {
+    gotacacs.MiddlewareHandler
+    limiter *rate.Limiter
+}
+
+func (m *rateLimitMiddleware) HandleAuthenStart(ctx context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    if !m.limiter.Allow() {
+        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusError, ServerMsg: []byte("rate limited")}
+    }
+    return m.Next.HandleAuthenStart(ctx, req)
+}
+```
+
+### Usage
+
+```go
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(ln),
+    gotacacs.WithServerSecret("sharedsecret"),
+    gotacacs.WithHandler(handler),
+    gotacacs.WithMiddleware(
+        func(next gotacacs.Handler) gotacacs.Handler {
+            return &rateLimitMiddleware{
+                MiddlewareHandler: gotacacs.MiddlewareHandler{Next: next},
+                limiter:           rate.NewLimiter(100, 10),
+            }
+        },
+    ),
+)
+```
+
+Middleware that does not call `m.Next.*` short-circuits the chain and the handler is not called.
 
 ## Listeners
 
