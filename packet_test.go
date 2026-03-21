@@ -620,3 +620,43 @@ func FuzzParseAcctPacket(f *testing.F) {
 		}
 	})
 }
+
+func FuzzParsePacket(f *testing.F) {
+	start := &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := start.MarshalBinary(); data != nil {
+		f.Add(uint8(PacketTypeAuthen), uint8(1), data)
+	}
+
+	authorReq := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := authorReq.MarshalBinary(); data != nil {
+		f.Add(uint8(PacketTypeAuthor), uint8(1), data)
+	}
+
+	acctReq := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	if data, _ := acctReq.MarshalBinary(); data != nil {
+		f.Add(uint8(PacketTypeAcct), uint8(1), data)
+	}
+
+	f.Fuzz(func(t *testing.T, packetType, seqNo uint8, data []byte) {
+		h := &Header{
+			Version:   MajorVersion<<4 | MinorVersionDefault,
+			Type:      packetType,
+			SeqNo:     seqNo,
+			SessionID: 1,
+		}
+
+		p, err := ParsePacket(h, data)
+		if err != nil {
+			return
+		}
+
+		marshaled, err := p.MarshalBinary()
+		if err != nil {
+			t.Fatalf("marshal failed after successful parse: %v", err)
+		}
+
+		if marshaled == nil {
+			t.Fatal("marshal returned nil")
+		}
+	})
+}
