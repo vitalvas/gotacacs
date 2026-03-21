@@ -42,6 +42,7 @@ if err := server.Serve(); err != nil {
 | `WithAccountingHandler(handler)` | Accounting-only handler | None |
 | `WithServerReadTimeout(duration)` | Read timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
+| `WithServerHooks(hooks)` | Lifecycle event hooks | None |
 
 ## Handler Interface
 
@@ -622,6 +623,52 @@ if server.KickSession(trackingID) {
 The kicked session receives an error response on its next packet. In single-connect mode, only the kicked session is terminated — the connection stays alive for other sessions. In non-single-connect mode, the connection closes after the error response.
 
 For idle sessions (waiting for client input in multi-step auth), the error is sent when the client sends its next packet.
+
+## Server Lifecycle Hooks
+
+Use `WithServerHooks` to receive notifications about server lifecycle events. All callbacks must be non-blocking. Nil callbacks are skipped.
+
+```go
+type ServerHooks struct {
+    OnConnect      func(event ConnectEvent)      // New connection accepted
+    OnDisconnect   func(event DisconnectEvent)    // Connection closed
+    OnSessionStart func(event SessionEvent)       // New session started
+    OnSessionEnd   func(event SessionEvent)       // Session completed or terminated
+    OnBadSecret    func(event BadSecretEvent)      // Secret validation failed
+    OnPacketError  func(event PacketErrorEvent)    // Packet parsing error
+}
+```
+
+### Event Types
+
+| Event | Fields | When |
+|-------|--------|------|
+| `ConnectEvent` | `RemoteAddr`, `LocalAddr`, `TLSState` | After TLS handshake and secret resolution |
+| `DisconnectEvent` | `RemoteAddr`, `LocalAddr` | Connection closing |
+| `SessionEvent` | `SessionInfo` (embedded) | Session start and end |
+| `BadSecretEvent` | `RemoteAddr`, `LocalAddr` | All rotation secrets fail, or single secret mismatch |
+| `PacketErrorEvent` | `RemoteAddr`, `LocalAddr`, `Err` | Malformed packet (non-secret error) |
+
+### Example
+
+```go
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(ln),
+    gotacacs.WithServerSecret("sharedsecret"),
+    gotacacs.WithHandler(handler),
+    gotacacs.WithServerHooks(gotacacs.ServerHooks{
+        OnConnect: func(event gotacacs.ConnectEvent) {
+            log.Printf("connect: %s", event.RemoteAddr)
+        },
+        OnDisconnect: func(event gotacacs.DisconnectEvent) {
+            log.Printf("disconnect: %s", event.RemoteAddr)
+        },
+        OnBadSecret: func(event gotacacs.BadSecretEvent) {
+            log.Printf("bad secret from %s", event.RemoteAddr)
+        },
+    }),
+)
+```
 
 ## Listeners
 

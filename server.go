@@ -154,6 +154,48 @@ func (f AcctHandlerFunc) HandleAcctRequest(ctx context.Context, req *AcctRequest
 	return f(ctx, req)
 }
 
+// ConnectEvent is fired when a new client connection is accepted.
+type ConnectEvent struct {
+	RemoteAddr net.Addr
+	LocalAddr  net.Addr
+	TLSState   *tls.ConnectionState
+}
+
+// DisconnectEvent is fired when a client connection is closed.
+type DisconnectEvent struct {
+	RemoteAddr net.Addr
+	LocalAddr  net.Addr
+}
+
+// SessionEvent is fired on session start and end.
+type SessionEvent struct {
+	SessionInfo
+}
+
+// BadSecretEvent is fired when secret validation fails.
+type BadSecretEvent struct {
+	RemoteAddr net.Addr
+	LocalAddr  net.Addr
+}
+
+// PacketErrorEvent is fired when a packet parsing error occurs.
+type PacketErrorEvent struct {
+	RemoteAddr net.Addr
+	LocalAddr  net.Addr
+	Err        error
+}
+
+// ServerHooks contains optional callbacks for server lifecycle events.
+// All callbacks must be non-blocking. Nil callbacks are skipped.
+type ServerHooks struct {
+	OnConnect      func(event ConnectEvent)
+	OnDisconnect   func(event DisconnectEvent)
+	OnSessionStart func(event SessionEvent)
+	OnSessionEnd   func(event SessionEvent)
+	OnBadSecret    func(event BadSecretEvent)
+	OnPacketError  func(event PacketErrorEvent)
+}
+
 // ServerOption configures a Server.
 type ServerOption func(*Server)
 
@@ -187,6 +229,13 @@ func WithServerSecretBytes(secret []byte) ServerOption {
 		s.secretProvider = SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
 			return SecretResponse{Secret: secret}
 		})
+	}
+}
+
+// WithServerHooks sets lifecycle hooks for the server.
+func WithServerHooks(hooks ServerHooks) ServerOption {
+	return func(s *Server) {
+		s.hooks = hooks
 	}
 }
 
@@ -239,6 +288,7 @@ type Server struct {
 	mu             sync.Mutex
 	listener       Listener
 	secretProvider SecretProvider
+	hooks          ServerHooks
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	maxBodyLength  uint32
@@ -402,18 +452,20 @@ func (s *Server) completeTLSHandshake(ctx context.Context, conn Conn) (*tls.Conn
 func (s *Server) registerSession(header *Header, remoteAddr, localAddr net.Addr, userData map[string]string, tlsState *tls.ConnectionState, trackingIDs map[uint32]uint64) {
 	trackingID := s.nextTrackingID.Add(1)
 	trackingIDs[header.SessionID] = trackingID
-	s.activeSessions.Store(trackingID, &trackedSession{
-		info: SessionInfo{
-			TrackingID: trackingID,
-			SessionID:  header.SessionID,
-			RemoteAddr: remoteAddr,
-			LocalAddr:  localAddr,
-			UserData:   userData,
-			TLSState:   tlsState,
-			PacketType: header.Type,
-			StartedAt:  time.Now(),
-		},
-	})
+	info := SessionInfo{
+		TrackingID: trackingID,
+		SessionID:  header.SessionID,
+		RemoteAddr: remoteAddr,
+		LocalAddr:  localAddr,
+		UserData:   userData,
+		TLSState:   tlsState,
+		PacketType: header.Type,
+		StartedAt:  time.Now(),
+	}
+	s.activeSessions.Store(trackingID, &trackedSession{info: info})
+	if s.hooks.OnSessionStart != nil {
+		s.hooks.OnSessionStart(SessionEvent{SessionInfo: info})
+	}
 }
 
 // isSessionKicked returns true if the session with the given tracking ID has been kicked.
@@ -432,6 +484,13 @@ func (s *Server) isSessionKicked(trackingID uint64) bool {
 func (s *Server) cleanupSession(sessionID uint32, localSessions map[uint32]*Session, trackingIDs map[uint32]uint64) {
 	delete(localSessions, sessionID)
 	if trackingID, ok := trackingIDs[sessionID]; ok {
+		if s.hooks.OnSessionEnd != nil {
+			if ts, loaded := s.activeSessions.Load(trackingID); loaded {
+				info := ts.(*trackedSession).info
+				info.State = SessionState(ts.(*trackedSession).state.Load())
+				s.hooks.OnSessionEnd(SessionEvent{SessionInfo: info})
+			}
+		}
 		s.activeSessions.Delete(trackingID)
 		delete(trackingIDs, sessionID)
 	}
@@ -499,14 +558,16 @@ func (s *Server) handleConnection(conn Conn) {
 	// Secret rotation: resolved after first packet when multiple secrets are available
 	secretResolved := false
 
+	s.fireConnect(remoteAddr, localAddr, secretReq.TLSState)
+
 	// Use connection-local session map to prevent cross-client session hijacking
 	localSessions := make(map[uint32]*Session)
 	trackingIDs := make(map[uint32]uint64)
 	defer func() {
-		// Clean up all tracked sessions on connection close
 		for _, trackingID := range trackingIDs {
 			s.activeSessions.Delete(trackingID)
 		}
+		s.fireDisconnect(remoteAddr, localAddr)
 	}()
 
 	for {
@@ -678,6 +739,12 @@ func (s *Server) resolveSecret(ctx context.Context, baseReq SecretRequest, heade
 	}
 
 	// All secrets failed: deobfuscate with the first secret
+	if s.hooks.OnBadSecret != nil {
+		s.hooks.OnBadSecret(BadSecretEvent{
+			RemoteAddr: baseReq.RemoteAddr,
+			LocalAddr:  baseReq.LocalAddr,
+		})
+	}
 	body = rawBody
 	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(firstSecret) > 0 {
 		body = Obfuscate(header, firstSecret, rawBody)
@@ -831,19 +898,56 @@ func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header
 	return respBody, respType, SessionStateError
 }
 
+func (s *Server) fireConnect(remoteAddr, localAddr net.Addr, tlsState *tls.ConnectionState) {
+	if s.hooks.OnConnect != nil {
+		s.hooks.OnConnect(ConnectEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr, TLSState: tlsState})
+	}
+}
+
+func (s *Server) fireDisconnect(remoteAddr, localAddr net.Addr) {
+	if s.hooks.OnDisconnect != nil {
+		s.hooks.OnDisconnect(DisconnectEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr})
+	}
+}
+
+func (s *Server) fireBadSecret(remoteAddr, localAddr net.Addr) {
+	if s.hooks.OnBadSecret != nil {
+		s.hooks.OnBadSecret(BadSecretEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr})
+	}
+}
+
+func (s *Server) firePacketError(remoteAddr, localAddr net.Addr, err error) {
+	if s.hooks.OnPacketError != nil {
+		s.hooks.OnPacketError(PacketErrorEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr, Err: err})
+	}
+}
+
 func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
 	reply := &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte(msg)}
 	respBody, _ := reply.MarshalBinary()
 	return respBody, PacketTypeAuthen
 }
 
+// handleUnmarshalError fires the appropriate hook and returns an error response for
+// authen packet unmarshal failures. Returns nil if there was no error.
+func (s *Server) handleUnmarshalError(err error, remoteAddr, localAddr net.Addr, errMsg string) ([]byte, uint8, bool) {
+	if err == nil {
+		return nil, 0, false
+	}
+	if errors.Is(err, ErrBadSecret) {
+		s.fireBadSecret(remoteAddr, localAddr)
+		resp, ptype := s.authenErrorResponse("bad secret")
+		return resp, ptype, true
+	}
+	s.firePacketError(remoteAddr, localAddr, err)
+	resp, ptype := s.authenErrorResponse(errMsg)
+	return resp, ptype, true
+}
+
 func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	start := &AuthenStart{}
-	if err := start.UnmarshalBinary(body); err != nil {
-		if errors.Is(err, ErrBadSecret) {
-			return s.authenErrorResponse("bad secret")
-		}
-		return s.authenErrorResponse("invalid START packet")
+	if resp, ptype, handled := s.handleUnmarshalError(start.UnmarshalBinary(body), remoteAddr, localAddr, "invalid START packet"); handled {
+		return resp, ptype
 	}
 	if s.authenHandler == nil {
 		return s.authenErrorResponse("no authentication handler configured")
@@ -863,11 +967,8 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 
 func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	cont := &AuthenContinue{}
-	if err := cont.UnmarshalBinary(body); err != nil {
-		if errors.Is(err, ErrBadSecret) {
-			return s.authenErrorResponse("bad secret")
-		}
-		return s.authenErrorResponse("invalid CONTINUE packet")
+	if resp, ptype, handled := s.handleUnmarshalError(cont.UnmarshalBinary(body), remoteAddr, localAddr, "invalid CONTINUE packet"); handled {
+		return resp, ptype
 	}
 	if s.authenHandler == nil {
 		return s.authenErrorResponse("no authentication handler configured")
@@ -896,7 +997,10 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid authorization request"
 		if errors.Is(err, ErrBadSecret) {
+			s.fireBadSecret(remoteAddr, localAddr)
 			msg = "bad secret"
+		} else {
+			s.firePacketError(remoteAddr, localAddr, err)
 		}
 		respBody, respType := s.authorErrorResponse(msg)
 		return respBody, respType, SessionStateError
@@ -936,7 +1040,10 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid accounting request"
 		if errors.Is(err, ErrBadSecret) {
+			s.fireBadSecret(remoteAddr, localAddr)
 			msg = "bad secret"
+		} else {
+			s.firePacketError(remoteAddr, localAddr, err)
 		}
 		respBody, respType := s.acctErrorResponse(msg)
 		return respBody, respType, SessionStateError

@@ -2192,3 +2192,212 @@ func TestServerKickSession(t *testing.T) {
 		assert.True(t, reply.IsPass())
 	})
 }
+
+func TestServerHooks(t *testing.T) {
+	t.Run("connect and disconnect hooks", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		connectCh := make(chan ConnectEvent, 1)
+		disconnectCh := make(chan DisconnectEvent, 1)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{
+				OnConnect:    func(event ConnectEvent) { connectCh <- event },
+				OnDisconnect: func(event DisconnectEvent) { disconnectCh <- event },
+			}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		connectEvent := <-connectCh
+		assert.NotNil(t, connectEvent.RemoteAddr)
+
+		disconnectEvent := <-disconnectCh
+		assert.NotNil(t, disconnectEvent.RemoteAddr)
+	})
+
+	t.Run("session start and end hooks", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		startCh := make(chan SessionEvent, 1)
+		endCh := make(chan SessionEvent, 1)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{
+				OnSessionStart: func(event SessionEvent) { startCh <- event },
+				OnSessionEnd:   func(event SessionEvent) { endCh <- event },
+			}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		startEvent := <-startCh
+		assert.NotZero(t, startEvent.TrackingID)
+		assert.Equal(t, uint8(PacketTypeAuthen), startEvent.PacketType)
+
+		endEvent := <-endCh
+		assert.Equal(t, SessionStateComplete, endEvent.State)
+	})
+
+	t.Run("bad secret hook", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		var badSecretCalled bool
+		var badSecretRemote net.Addr
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("serversecret"),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{
+				OnBadSecret: func(event BadSecretEvent) {
+					badSecretCalled = true
+					badSecretRemote = event.RemoteAddr
+				},
+			}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+
+		time.Sleep(50 * time.Millisecond)
+		assert.True(t, badSecretCalled)
+		assert.NotNil(t, badSecretRemote)
+	})
+
+	t.Run("bad secret hook with rotation", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		var badSecretCalled bool
+
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			secrets := []string{"secret1", "secret2"}
+			return SecretResponse{
+				Secret:   []byte(secrets[req.Attempt]),
+				Attempts: len(secrets),
+			}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{
+				OnBadSecret: func(_ BadSecretEvent) {
+					badSecretCalled = true
+				},
+			}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// All secrets fail
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+
+		time.Sleep(50 * time.Millisecond)
+		assert.True(t, badSecretCalled)
+	})
+
+	t.Run("packet error hook", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		var packetErrorCalled bool
+		var packetErr error
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{
+				OnPacketError: func(event PacketErrorEvent) {
+					packetErrorCalled = true
+					packetErr = event.Err
+				},
+			}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Send an invalid packet body
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		secret := []byte("testsecret")
+		header := &Header{
+			Version:   0xc0,
+			Type:      PacketTypeAuthen,
+			SeqNo:     1,
+			SessionID: 12345,
+			Length:    2,
+		}
+		body := []byte{0x01, 0x02}
+		obfuscated := Obfuscate(header, secret, body)
+		headerData, _ := header.MarshalBinary()
+		conn.Write(headerData)
+		conn.Write(obfuscated)
+
+		// Read error response
+		respHeaderBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, respHeaderBuf)
+
+		time.Sleep(50 * time.Millisecond)
+		assert.True(t, packetErrorCalled)
+		assert.NotNil(t, packetErr)
+	})
+
+	t.Run("nil hooks are safe", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+			WithServerHooks(ServerHooks{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+	})
+}
