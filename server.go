@@ -2,6 +2,7 @@ package gotacacs
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,10 @@ type SecretRequest struct {
 	RemoteAddr net.Addr
 	// LocalAddr is the local address of the server connection.
 	LocalAddr net.Addr
+	// TLSState is the TLS connection state when the connection is TLS-secured.
+	// Nil for non-TLS connections. Provides access to client certificates
+	// via PeerCertificates for mutual TLS authentication.
+	TLSState *tls.ConnectionState
 	// Attempt is the 0-based secret attempt index for secret rotation.
 	// The server calls GetSecret multiple times with increasing Attempt values
 	// when the first secret fails to deobfuscate the packet.
@@ -365,15 +370,29 @@ func (s *Server) handleConnection(conn Conn) {
 		RemoteAddr: conn.RemoteAddr(),
 		LocalAddr:  conn.LocalAddr(),
 	}
+
+	// RFC 9887: Detect if connection is TLS-secured
+	isTLS := IsTLSConn(conn)
+	if isTLS {
+		if tc, ok := conn.(TLSConn); ok {
+			// Complete TLS handshake before reading connection state,
+			// so PeerCertificates and other fields are populated.
+			if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+				if err := hs.HandshakeContext(ctx); err != nil {
+					return
+				}
+			}
+			state := tc.ConnectionState()
+			secretReq.TLSState = &state
+		}
+	}
+
 	secretResp := s.getSecret(ctx, secretReq)
 	secret := secretResp.Secret
 	userData := secretResp.UserData
 	totalAttempts := max(secretResp.Attempts, 0)
 	remoteAddr := secretReq.RemoteAddr
 	localAddr := secretReq.LocalAddr
-
-	// RFC 9887: Detect if connection is TLS-secured
-	isTLS := IsTLSConn(conn)
 
 	// Secret rotation: resolved after first packet when multiple secrets are available
 	secretResolved := false
@@ -423,7 +442,7 @@ func (s *Server) handleConnection(conn Conn) {
 				return
 			}
 
-			body, secret, userData = s.resolveSecret(ctx, conn, header, body, secret, userData, totalAttempts, isTLS)
+			body, secret, userData = s.resolveSecret(ctx, secretReq, header, body, secret, userData, totalAttempts, isTLS)
 			secretResolved = true
 		}
 
@@ -525,7 +544,7 @@ func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretRespons
 // the packet. Returns the deobfuscated body and the resolved secret/userData.
 // If all secrets fail, returns the body deobfuscated with the first secret
 // so the handler produces a standard "bad secret" response.
-func (s *Server) resolveSecret(ctx context.Context, conn Conn, header *Header, rawBody, firstSecret []byte, firstUserData map[string]string, totalAttempts int, isTLS bool) (body, secret []byte, userData map[string]string) {
+func (s *Server) resolveSecret(ctx context.Context, baseReq SecretRequest, header *Header, rawBody, firstSecret []byte, firstUserData map[string]string, totalAttempts int, isTLS bool) (body, secret []byte, userData map[string]string) {
 	for i := range totalAttempts {
 		var attemptSecret []byte
 		var attemptUserData map[string]string
@@ -533,11 +552,9 @@ func (s *Server) resolveSecret(ctx context.Context, conn Conn, header *Header, r
 			attemptSecret = firstSecret
 			attemptUserData = firstUserData
 		} else {
-			resp := s.getSecret(ctx, SecretRequest{
-				RemoteAddr: conn.RemoteAddr(),
-				LocalAddr:  conn.LocalAddr(),
-				Attempt:    i,
-			})
+			req := baseReq
+			req.Attempt = i
+			resp := s.getSecret(ctx, req)
 			attemptSecret = resp.Secret
 			attemptUserData = resp.UserData
 		}

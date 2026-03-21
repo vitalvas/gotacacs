@@ -2,6 +2,7 @@ package gotacacs
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"testing"
@@ -1831,5 +1832,120 @@ func TestServerSecretRotation(t *testing.T) {
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 		require.NoError(t, err)
 		assert.True(t, reply.IsSuccess())
+	})
+}
+
+func TestServerTLSState(t *testing.T) {
+	t.Run("TLSState populated on TLS connection", func(t *testing.T) {
+		serverCert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		var receivedTLSState *tls.ConnectionState
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			receivedTLSState = req.TLSState
+			return SecretResponse{}
+		})
+
+		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		clientConfig := &tls.Config{InsecureSkipVerify: true}
+		client := NewClient(WithAddress(ln.Addr().String()), WithTLSConfig(clientConfig))
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+
+		time.Sleep(50 * time.Millisecond)
+		require.NotNil(t, receivedTLSState, "TLSState should be populated for TLS connections")
+		assert.True(t, receivedTLSState.HandshakeComplete)
+	})
+
+	t.Run("TLSState nil on non-TLS connection", func(t *testing.T) {
+		var receivedTLSState *tls.ConnectionState
+		called := false
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			receivedTLSState = req.TLSState
+			called = true
+			return SecretResponse{Secret: []byte("testsecret")}
+		})
+
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+
+		time.Sleep(50 * time.Millisecond)
+		assert.True(t, called, "provider should have been called")
+		assert.Nil(t, receivedTLSState, "TLSState should be nil for non-TLS connections")
+	})
+
+	t.Run("TLSState contains client certificate CN", func(t *testing.T) {
+		caCert, caKey, err := generateTestCA()
+		require.NoError(t, err)
+
+		serverCert, err := generateSignedCertificate(caCert, caKey, "server.test")
+		require.NoError(t, err)
+
+		clientCert, err := generateSignedCertificate(caCert, caKey, "router1.example.com")
+		require.NoError(t, err)
+
+		caCertPool := mustCertPool(caCert)
+
+		var receivedCN string
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			if req.TLSState != nil && len(req.TLSState.PeerCertificates) > 0 {
+				receivedCN = req.TLSState.PeerCertificates[0].Subject.CommonName
+			}
+			return SecretResponse{}
+		})
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{serverCert},
+			ClientCAs:    caCertPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+		}
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithSecretProvider(provider),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		clientConfig := &tls.Config{
+			Certificates:       []tls.Certificate{clientCert},
+			RootCAs:            caCertPool,
+			InsecureSkipVerify: true,
+		}
+		client := NewClient(WithAddress(ln.Addr().String()), WithTLSConfig(clientConfig))
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+
+		time.Sleep(50 * time.Millisecond)
+		assert.Equal(t, "router1.example.com", receivedCN)
 	})
 }

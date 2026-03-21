@@ -96,6 +96,11 @@ func (c *tlsConn) ConnectionState() tls.ConnectionState {
 	return c.conn.ConnectionState()
 }
 
+// HandshakeContext performs the TLS handshake, if not already completed.
+func (c *tlsConn) HandshakeContext(ctx context.Context) error {
+	return c.conn.HandshakeContext(ctx)
+}
+
 // IsTLSConn returns true if the connection is TLS-secured.
 func IsTLSConn(conn Conn) bool {
 	_, ok := conn.(TLSConn)

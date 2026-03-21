@@ -339,9 +339,10 @@ Use `SecretProviderFunc` for per-client secrets and custom user data:
 
 ```go
 type SecretRequest struct {
-    RemoteAddr net.Addr  // Client address
-    LocalAddr  net.Addr  // Server address
-    Attempt    int       // 0-based secret attempt index (for rotation)
+    RemoteAddr net.Addr              // Client address
+    LocalAddr  net.Addr              // Server address
+    TLSState   *tls.ConnectionState  // TLS state (nil for non-TLS)
+    Attempt    int                   // 0-based secret attempt index (for rotation)
 }
 
 type SecretResponse struct {
@@ -423,6 +424,27 @@ secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotaca
 ```
 
 When `Attempts` is 0 or 1, the server uses the single-secret fast path with no behavioral change from previous versions.
+
+### TLS Client Certificate Access
+
+On TLS connections, `SecretRequest.TLSState` provides access to the client certificate. Use this to extract the CN or other certificate fields and pass them to handlers via `UserData`:
+
+```go
+secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+    userData := map[string]string{}
+
+    if req.TLSState != nil && len(req.TLSState.PeerCertificates) > 0 {
+        cert := req.TLSState.PeerCertificates[0]
+        userData["cn"] = cert.Subject.CommonName
+    }
+
+    return gotacacs.SecretResponse{
+        UserData: userData,
+    }
+})
+```
+
+`TLSState` is nil for non-TLS connections.
 
 ## TLS Configuration (RFC 9887)
 
