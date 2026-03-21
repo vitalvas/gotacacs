@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/binary"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -564,9 +565,9 @@ func TestTacquitoUnencryptedFlag(t *testing.T) {
 func byteSizeName(size int) string {
 	switch {
 	case size >= 1024:
-		return string(rune('0'+size/1024)) + "KB"
+		return fmt.Sprintf("%dKB", size/1024)
 	default:
-		return string(rune('0'+size/100)) + string(rune('0'+(size%100)/10)) + string(rune('0'+size%10)) + "B"
+		return fmt.Sprintf("%dB", size)
 	}
 }
 
