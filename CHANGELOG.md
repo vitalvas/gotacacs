@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/vitalvas/gotacacs/compare/v0.1.0...v0.2.0) (2026-03-21)
+
+
+### Features
+
+* add LocalAddr to handler request contexts ([425f6fb](https://github.com/vitalvas/gotacacs/commit/425f6fbcc4c01a2d26f50b6ab00580c211a589fe))
+* add middleware chain and fix hook reliability ([4b18da1](https://github.com/vitalvas/gotacacs/commit/4b18da113cfb0f1406beb830b4642b8f87c1bb74))
+* add server lifecycle hooks ([ce823c3](https://github.com/vitalvas/gotacacs/commit/ce823c3a115bc1603bd6648b068c0f445b14fbe3))
+* expose TLS connection state in SecretRequest ([a7f1985](https://github.com/vitalvas/gotacacs/commit/a7f1985260881a9836150ad178ac180b4b49b79c))
+* replace SessionStore with active session tracking and kick support ([d765b73](https://github.com/vitalvas/gotacacs/commit/d765b7382a2fe54ddf68bd5bbb3410b35e5fa9d3))
+
+
+### Bug Fixes
+
+* reduce function parameter counts with connState struct ([3347720](https://github.com/vitalvas/gotacacs/commit/3347720a92329c697e8ce0bd91bb6be0f94445b1))
+* resolve policy violations in test files ([4c119ad](https://github.com/vitalvas/gotacacs/commit/4c119ad855af092037042106bdf30f006aa8c532))
+
 ## [0.1.0](https://github.com/vitalvas/gotacacs/compare/v0.0.1...v0.1.0) (2026-02-20)
 
 
