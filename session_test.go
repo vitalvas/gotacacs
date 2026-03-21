@@ -233,145 +233,18 @@ func TestSessionConcurrency(t *testing.T) {
 	})
 }
 
-func TestMemorySessionStore(t *testing.T) {
-	t.Run("create store", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		assert.NotNil(t, store)
-		assert.Equal(t, 0, store.Count())
-	})
-
-	t.Run("put and get session", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		session := NewSessionWithID(0x12345678, true)
-
-		store.Put(session)
-		assert.Equal(t, 1, store.Count())
-
-		retrieved, ok := store.Get(0x12345678)
-		assert.True(t, ok)
-		assert.Equal(t, session, retrieved)
-	})
-
-	t.Run("get nonexistent session", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		_, ok := store.Get(0x12345678)
-		assert.False(t, ok)
-	})
-
-	t.Run("put nil session", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		store.Put(nil)
-		assert.Equal(t, 0, store.Count())
-	})
-
-	t.Run("delete session", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		session := NewSessionWithID(0x12345678, true)
-
-		store.Put(session)
-		assert.Equal(t, 1, store.Count())
-
-		store.Delete(0x12345678)
-		assert.Equal(t, 0, store.Count())
-
-		_, ok := store.Get(0x12345678)
-		assert.False(t, ok)
-	})
-
-	t.Run("delete nonexistent session", func(_ *testing.T) {
-		store := NewMemorySessionStore()
-		store.Delete(0x12345678) // Should not panic
-	})
-
-	t.Run("multiple sessions", func(t *testing.T) {
-		store := NewMemorySessionStore()
-
-		for i := uint32(1); i <= 10; i++ {
-			store.Put(NewSessionWithID(i, true))
+func TestTrackedSession(t *testing.T) {
+	t.Run("kicked flag", func(t *testing.T) {
+		ts := &trackedSession{
+			info: SessionInfo{
+				TrackingID: 1,
+				SessionID:  100,
+				State:      SessionStateActive,
+			},
 		}
-
-		assert.Equal(t, 10, store.Count())
-
-		for i := uint32(1); i <= 10; i++ {
-			session, ok := store.Get(i)
-			assert.True(t, ok)
-			assert.Equal(t, i, session.ID())
-		}
-	})
-}
-
-func TestMemorySessionStoreCleanup(t *testing.T) {
-	t.Run("cleanup expired sessions", func(t *testing.T) {
-		store := NewMemorySessionStore()
-
-		// Create old session
-		oldSession := NewSessionWithID(1, true)
-		store.Put(oldSession)
-
-		// Create new session
-		time.Sleep(50 * time.Millisecond)
-		newSession := NewSessionWithID(2, true)
-		newSession.Touch()
-		store.Put(newSession)
-
-		assert.Equal(t, 2, store.Count())
-
-		// Cleanup sessions older than 25ms
-		removed := store.Cleanup(25 * time.Millisecond)
-		assert.Equal(t, 1, removed)
-		assert.Equal(t, 1, store.Count())
-
-		// Old session should be removed
-		_, ok := store.Get(1)
-		assert.False(t, ok)
-
-		// New session should remain
-		_, ok = store.Get(2)
-		assert.True(t, ok)
-	})
-
-	t.Run("cleanup with no expired sessions", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		store.Put(NewSessionWithID(1, true))
-		store.Put(NewSessionWithID(2, true))
-
-		removed := store.Cleanup(time.Hour)
-		assert.Equal(t, 0, removed)
-		assert.Equal(t, 2, store.Count())
-	})
-
-	t.Run("cleanup empty store", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		removed := store.Cleanup(time.Second)
-		assert.Equal(t, 0, removed)
-	})
-}
-
-func TestMemorySessionStoreConcurrency(t *testing.T) {
-	t.Run("concurrent operations", func(_ *testing.T) {
-		store := NewMemorySessionStore()
-		var wg sync.WaitGroup
-
-		// Writers
-		for i := range uint32(10) {
-			wg.Add(1)
-			go func(id uint32) {
-				defer wg.Done()
-				for range 100 {
-					store.Put(NewSessionWithID(id, true))
-					store.Get(id)
-					store.Delete(id)
-				}
-			}(i)
-		}
-
-		wg.Wait()
-	})
-}
-
-func TestSessionStoreInterface(t *testing.T) {
-	t.Run("MemorySessionStore implements SessionStore", func(_ *testing.T) {
-		var _ SessionStore = (*MemorySessionStore)(nil)
+		assert.False(t, ts.kicked.Load())
+		ts.kicked.Store(true)
+		assert.True(t, ts.kicked.Load())
 	})
 }
 
@@ -425,46 +298,4 @@ func BenchmarkSessionValidateSeqNo(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = session.ValidateSeqNo(3) // validate next expected client seq
 	}
-}
-
-func BenchmarkMemorySessionStoreOperations(b *testing.B) {
-	b.Run("Put", func(b *testing.B) {
-		store := NewMemorySessionStore()
-		sessions := make([]*Session, b.N)
-		for i := range sessions {
-			sessions[i] = NewSessionWithID(uint32(i), true)
-		}
-
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			store.Put(sessions[i])
-		}
-	})
-
-	b.Run("Get", func(b *testing.B) {
-		store := NewMemorySessionStore()
-		for i := range 1000 {
-			store.Put(NewSessionWithID(uint32(i), true))
-		}
-
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_, _ = store.Get(uint32(i % 1000))
-		}
-	})
-
-	b.Run("Delete", func(b *testing.B) {
-		store := NewMemorySessionStore()
-		for i := range b.N {
-			store.Put(NewSessionWithID(uint32(i), true))
-		}
-
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			store.Delete(uint32(i))
-		}
-	})
 }

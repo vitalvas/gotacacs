@@ -139,7 +139,6 @@ func TestServerOptions(t *testing.T) {
 		assert.NotNil(t, server)
 		assert.Nil(t, server.listener)
 		assert.Nil(t, server.secretProvider)
-		assert.NotNil(t, server.sessionStore)
 		assert.Equal(t, 30*time.Second, server.readTimeout)
 		assert.Equal(t, 30*time.Second, server.writeTimeout)
 	})
@@ -160,12 +159,6 @@ func TestServerOptions(t *testing.T) {
 		})
 		server := NewServer(WithSecretProvider(provider))
 		assert.NotNil(t, server.secretProvider)
-	})
-
-	t.Run("with session store", func(t *testing.T) {
-		store := NewMemorySessionStore()
-		server := NewServer(WithServerSessionStore(store))
-		assert.Equal(t, store, server.sessionStore)
 	})
 
 	t.Run("with timeouts", func(t *testing.T) {
@@ -189,11 +182,6 @@ func TestServerOptions(t *testing.T) {
 	t.Run("with max body length", func(t *testing.T) {
 		server := NewServer(WithServerMaxBodyLength(2048))
 		assert.Equal(t, uint32(2048), server.maxBodyLength)
-	})
-
-	t.Run("with nil session store keeps default", func(t *testing.T) {
-		server := NewServer(WithServerSessionStore(nil))
-		assert.NotNil(t, server.sessionStore)
 	})
 
 	t.Run("with secret bytes used in connection", func(t *testing.T) {
@@ -783,15 +771,12 @@ func TestServerHandlerNilReply(t *testing.T) {
 }
 
 func TestServerSessionState(t *testing.T) {
-	runSessionStateTest := func(t *testing.T, setupServer func(ln Listener, store SessionStore, captureID *uint32) *Server, runClient func(client *Client) error) {
+	runSessionStateTest := func(t *testing.T, setupServer func(ln Listener) *Server, runClient func(client *Client) error) {
 		t.Helper()
 		ln, err := ListenTCP("127.0.0.1:0")
 		require.NoError(t, err)
 
-		sessionStore := NewMemorySessionStore()
-		var capturedSessionID uint32
-
-		server := setupServer(ln, sessionStore, &capturedSessionID)
+		server := setupServer(ln)
 		go func() { server.Serve() }()
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
@@ -800,16 +785,14 @@ func TestServerSessionState(t *testing.T) {
 		require.NoError(t, runClient(client))
 
 		time.Sleep(10 * time.Millisecond)
-		_, exists := sessionStore.Get(capturedSessionID)
-		assert.False(t, exists, "session should be cleaned up")
+		assert.Empty(t, server.Sessions(), "session should be cleaned up")
 	}
 
 	t.Run("authentication pass", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 						return &AuthenReply{Status: AuthenStatusPass}
 					})))
 			},
@@ -824,10 +807,9 @@ func TestServerSessionState(t *testing.T) {
 
 	t.Run("authentication fail", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 						return &AuthenReply{Status: AuthenStatusFail}
 					})))
 			},
@@ -842,10 +824,9 @@ func TestServerSessionState(t *testing.T) {
 
 	t.Run("authorization pass", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, req *AuthorRequestContext) *AuthorResponse {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, _ *AuthorRequestContext) *AuthorResponse {
 						return &AuthorResponse{Status: AuthorStatusPassAdd}
 					})))
 			},
@@ -860,10 +841,9 @@ func TestServerSessionState(t *testing.T) {
 
 	t.Run("authorization fail", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, req *AuthorRequestContext) *AuthorResponse {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAuthorizationHandler(AuthorHandlerFunc(func(_ context.Context, _ *AuthorRequestContext) *AuthorResponse {
 						return &AuthorResponse{Status: AuthorStatusFail}
 					})))
 			},
@@ -878,10 +858,9 @@ func TestServerSessionState(t *testing.T) {
 
 	t.Run("accounting success", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, _ *AcctRequestContext) *AcctReply {
 						return &AcctReply{Status: AcctStatusSuccess}
 					})))
 			},
@@ -896,10 +875,9 @@ func TestServerSessionState(t *testing.T) {
 
 	t.Run("accounting error", func(t *testing.T) {
 		runSessionStateTest(t,
-			func(ln Listener, store SessionStore, captureID *uint32) *Server {
-				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"), WithServerSessionStore(store),
-					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
-						*captureID = req.SessionID
+			func(ln Listener) *Server {
+				return NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
+					WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, _ *AcctRequestContext) *AcctReply {
 						return &AcctReply{Status: AcctStatusError}
 					})))
 			},
@@ -1947,5 +1925,270 @@ func TestServerTLSState(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 		assert.Equal(t, "router1.example.com", receivedCN)
+	})
+}
+
+func TestServerSessions(t *testing.T) {
+	t.Run("empty when no sessions", func(t *testing.T) {
+		server := NewServer()
+		assert.Empty(t, server.Sessions())
+	})
+
+	t.Run("returns active session", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		blocked := make(chan struct{})
+		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+			<-blocked
+			return &AuthenReply{Status: AuthenStatusPass}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Start client in background — it will block in handler
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+			client.Authenticate(context.Background(), "testuser", "password")
+		}()
+
+		// Wait for the session to appear
+		time.Sleep(100 * time.Millisecond)
+
+		sessions := server.Sessions()
+		require.Len(t, sessions, 1)
+		assert.NotZero(t, sessions[0].TrackingID)
+		assert.NotNil(t, sessions[0].RemoteAddr)
+		assert.NotNil(t, sessions[0].LocalAddr)
+		assert.Nil(t, sessions[0].TLSState)
+		assert.Equal(t, uint8(PacketTypeAuthen), sessions[0].PacketType)
+		assert.Equal(t, SessionStateActive, sessions[0].State)
+		assert.False(t, sessions[0].StartedAt.IsZero())
+
+		close(blocked)
+		<-done
+	})
+
+	t.Run("TLS session has TLSState", func(t *testing.T) {
+		serverCert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		blocked := make(chan struct{})
+		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+			<-blocked
+			return &AuthenReply{Status: AuthenStatusPass}
+		})
+
+		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
+		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			clientConfig := &tls.Config{InsecureSkipVerify: true}
+			client := NewClient(WithAddress(ln.Addr().String()), WithTLSConfig(clientConfig))
+			client.Authenticate(context.Background(), "testuser", "password")
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		sessions := server.Sessions()
+		require.Len(t, sessions, 1)
+		require.NotNil(t, sessions[0].TLSState)
+		assert.True(t, sessions[0].TLSState.HandshakeComplete)
+
+		close(blocked)
+		<-done
+	})
+
+	t.Run("session removed after completion", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithHandler(&testHandler{}),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+		reply, err := client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
+
+		time.Sleep(50 * time.Millisecond)
+		assert.Empty(t, server.Sessions())
+	})
+
+	t.Run("tracking IDs are unique", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		blocked := make(chan struct{})
+		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+			<-blocked
+			return &AuthenReply{Status: AuthenStatusPass}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		// Start multiple clients
+		done := make(chan struct{})
+		for range 3 {
+			go func() {
+				client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+				client.Authenticate(context.Background(), "testuser", "password")
+			}()
+		}
+
+		time.Sleep(150 * time.Millisecond)
+		sessions := server.Sessions()
+		assert.Len(t, sessions, 3)
+
+		ids := make(map[uint64]bool)
+		for _, s := range sessions {
+			assert.False(t, ids[s.TrackingID], "tracking IDs must be unique")
+			ids[s.TrackingID] = true
+		}
+
+		close(blocked)
+		close(done)
+	})
+}
+
+func TestServerKickSession(t *testing.T) {
+	t.Run("kick nonexistent returns false", func(t *testing.T) {
+		server := NewServer()
+		assert.False(t, server.KickSession(999))
+	})
+
+	t.Run("kick active session", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		step := 0
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+				step++
+				return &AuthenReply{
+					Status:    AuthenStatusGetPass,
+					ServerMsg: []byte("Password: "),
+				}
+			},
+			onContinue: func(_ context.Context, _ *AuthenContinueRequest) *AuthenReply {
+				step++
+				return &AuthenReply{Status: AuthenStatusPass}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
+
+		// Start ASCII auth — server sends GETPASS, then we kick before CONTINUE
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			// At this point, the session is active (GETPASS received).
+			// Kick it before sending the CONTINUE.
+			sessions := server.Sessions()
+			require.Len(t, sessions, 1)
+			assert.True(t, server.KickSession(sessions[0].TrackingID))
+			return "password", nil
+		})
+
+		require.NoError(t, err)
+		assert.True(t, reply.IsError(), "kicked session should get error response")
+	})
+
+	t.Run("kick in single-connect does not close connection", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		kickFirst := true
+		handler := &multiStepHandler{
+			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+				if kickFirst {
+					return &AuthenReply{
+						Status:    AuthenStatusGetPass,
+						ServerMsg: []byte("Password: "),
+					}
+				}
+				return &AuthenReply{Status: AuthenStatusPass}
+			},
+			onContinue: func(_ context.Context, _ *AuthenContinueRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusPass}
+			},
+		}
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+		)
+
+		go func() { server.Serve() }()
+		defer server.Shutdown(context.Background())
+		time.Sleep(50 * time.Millisecond)
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithSecret("testsecret"),
+			WithSingleConnect(true),
+		)
+		defer client.Close()
+
+		// First request: multi-step, kick during it
+		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+			sessions := server.Sessions()
+			require.Len(t, sessions, 1)
+			server.KickSession(sessions[0].TrackingID)
+			return "password", nil
+		})
+		require.NoError(t, err)
+		assert.True(t, reply.IsError())
+
+		// Second request on same connection should still work
+		kickFirst = false
+		reply, err = client.Authenticate(context.Background(), "testuser", "password")
+		require.NoError(t, err)
+		assert.True(t, reply.IsPass())
 	})
 }

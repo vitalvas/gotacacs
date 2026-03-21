@@ -2,9 +2,12 @@ package gotacacs
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -211,77 +214,33 @@ func generateSessionID() (uint32, error) {
 	return binary.BigEndian.Uint32(buf[:]), nil
 }
 
-// SessionStore is the interface for session storage.
-type SessionStore interface {
-	// Get retrieves a session by ID.
-	Get(id uint32) (*Session, bool)
-
-	// Put stores a session.
-	Put(session *Session)
-
-	// Delete removes a session by ID.
-	Delete(id uint32)
-
-	// Cleanup removes expired sessions older than the given duration.
-	Cleanup(maxAge time.Duration) int
+// SessionInfo contains metadata about an active session tracked by the server.
+// TrackingID is unique server-wide; SessionID is the TACACS+ session ID from the
+// NAS which may collide across connections.
+type SessionInfo struct {
+	// TrackingID is a unique monotonic identifier assigned by the server.
+	TrackingID uint64
+	// SessionID is the TACACS+ session ID from the client (NAS).
+	SessionID uint32
+	// RemoteAddr is the client address.
+	RemoteAddr net.Addr
+	// LocalAddr is the server address.
+	LocalAddr net.Addr
+	// UserData is custom metadata from the SecretProvider.
+	UserData map[string]string
+	// TLSState is the TLS connection state. Nil for non-TLS connections.
+	TLSState *tls.ConnectionState
+	// PacketType is the TACACS+ packet type (authen, author, acct).
+	PacketType uint8
+	// State is the current session state.
+	State SessionState
+	// StartedAt is when the session was created.
+	StartedAt time.Time
 }
 
-// MemorySessionStore is an in-memory implementation of SessionStore.
-type MemorySessionStore struct {
-	sessions sync.Map
-}
-
-// NewMemorySessionStore creates a new in-memory session store.
-func NewMemorySessionStore() *MemorySessionStore {
-	return &MemorySessionStore{}
-}
-
-// Get retrieves a session by ID.
-func (s *MemorySessionStore) Get(id uint32) (*Session, bool) {
-	value, ok := s.sessions.Load(id)
-	if !ok {
-		return nil, false
-	}
-	session, ok := value.(*Session)
-	return session, ok
-}
-
-// Put stores a session.
-func (s *MemorySessionStore) Put(session *Session) {
-	if session != nil {
-		s.sessions.Store(session.ID(), session)
-	}
-}
-
-// Delete removes a session by ID.
-func (s *MemorySessionStore) Delete(id uint32) {
-	s.sessions.Delete(id)
-}
-
-// Cleanup removes expired sessions older than the given duration.
-// Returns the number of sessions removed.
-func (s *MemorySessionStore) Cleanup(maxAge time.Duration) int {
-	cutoff := time.Now().Add(-maxAge)
-	removed := 0
-
-	s.sessions.Range(func(key, value any) bool {
-		session, ok := value.(*Session)
-		if ok && session.LastActivity().Before(cutoff) {
-			s.sessions.Delete(key)
-			removed++
-		}
-		return true
-	})
-
-	return removed
-}
-
-// Count returns the number of sessions in the store.
-func (s *MemorySessionStore) Count() int {
-	count := 0
-	s.sessions.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	return count
+// trackedSession is the internal representation of a tracked session.
+type trackedSession struct {
+	info   SessionInfo
+	state  atomic.Uint32
+	kicked atomic.Bool
 }

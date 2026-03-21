@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -188,16 +190,6 @@ func WithServerSecretBytes(secret []byte) ServerOption {
 	}
 }
 
-// WithServerSessionStore sets the session store.
-// If store is nil, the default memory session store is retained.
-func WithServerSessionStore(store SessionStore) ServerOption {
-	return func(s *Server) {
-		if store != nil {
-			s.sessionStore = store
-		}
-	}
-}
-
 // WithServerReadTimeout sets the read timeout for client connections.
 func WithServerReadTimeout(timeout time.Duration) ServerOption {
 	return func(s *Server) {
@@ -247,7 +239,6 @@ type Server struct {
 	mu             sync.Mutex
 	listener       Listener
 	secretProvider SecretProvider
-	sessionStore   SessionStore
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	maxBodyLength  uint32
@@ -255,15 +246,16 @@ type Server struct {
 	authorHandler  AuthorizationHandler
 	acctHandler    AccountingHandler
 
-	running    bool
-	shutdownCh chan struct{}
-	wg         sync.WaitGroup
+	running        bool
+	shutdownCh     chan struct{}
+	wg             sync.WaitGroup
+	activeSessions sync.Map
+	nextTrackingID atomic.Uint64
 }
 
 // NewServer creates a new TACACS+ server with the given options.
 func NewServer(opts ...ServerOption) *Server {
 	s := &Server{
-		sessionStore:  NewMemorySessionStore(),
 		readTimeout:   30 * time.Second,
 		writeTimeout:  30 * time.Second,
 		maxBodyLength: DefaultMaxBodyLength,
@@ -361,6 +353,122 @@ func (s *Server) Addr() net.Addr {
 	return s.listener.Addr()
 }
 
+// Sessions returns a snapshot of all active sessions.
+// The returned SessionInfo values are deep copies safe for concurrent use.
+func (s *Server) Sessions() []SessionInfo {
+	var sessions []SessionInfo
+	s.activeSessions.Range(func(_, value any) bool {
+		ts := value.(*trackedSession)
+		info := ts.info
+		info.State = SessionState(ts.state.Load())
+		if info.UserData != nil {
+			ud := make(map[string]string, len(info.UserData))
+			maps.Copy(ud, info.UserData)
+			info.UserData = ud
+		}
+		sessions = append(sessions, info)
+		return true
+	})
+	return sessions
+}
+
+// KickSession marks a session for termination by its tracking ID.
+// Returns true if the session was found and marked.
+// The session will receive an error response on its next packet.
+func (s *Server) KickSession(trackingID uint64) bool {
+	value, ok := s.activeSessions.Load(trackingID)
+	if !ok {
+		return false
+	}
+	value.(*trackedSession).kicked.Store(true)
+	return true
+}
+
+// completeTLSHandshake completes the TLS handshake and returns the connection state.
+func (s *Server) completeTLSHandshake(ctx context.Context, conn Conn) (*tls.ConnectionState, error) {
+	if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+		if err := hs.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if tc, ok := conn.(TLSConn); ok {
+		state := tc.ConnectionState()
+		return &state, nil
+	}
+	return nil, nil
+}
+
+// registerSession registers a new session in the active sessions tracker.
+func (s *Server) registerSession(header *Header, remoteAddr, localAddr net.Addr, userData map[string]string, tlsState *tls.ConnectionState, trackingIDs map[uint32]uint64) {
+	trackingID := s.nextTrackingID.Add(1)
+	trackingIDs[header.SessionID] = trackingID
+	s.activeSessions.Store(trackingID, &trackedSession{
+		info: SessionInfo{
+			TrackingID: trackingID,
+			SessionID:  header.SessionID,
+			RemoteAddr: remoteAddr,
+			LocalAddr:  localAddr,
+			UserData:   userData,
+			TLSState:   tlsState,
+			PacketType: header.Type,
+			StartedAt:  time.Now(),
+		},
+	})
+}
+
+// isSessionKicked returns true if the session with the given tracking ID has been kicked.
+func (s *Server) isSessionKicked(trackingID uint64) bool {
+	if trackingID == 0 {
+		return false
+	}
+	ts, ok := s.activeSessions.Load(trackingID)
+	if !ok {
+		return false
+	}
+	return ts.(*trackedSession).kicked.Load()
+}
+
+// cleanupSession removes a session from local and active session maps.
+func (s *Server) cleanupSession(sessionID uint32, localSessions map[uint32]*Session, trackingIDs map[uint32]uint64) {
+	delete(localSessions, sessionID)
+	if trackingID, ok := trackingIDs[sessionID]; ok {
+		s.activeSessions.Delete(trackingID)
+		delete(trackingIDs, sessionID)
+	}
+}
+
+// sendKickedResponse sends an error response for a kicked session.
+func (s *Server) sendKickedResponse(conn Conn, header *Header, secret []byte, isTLS bool) {
+	var respBody []byte
+	var respType uint8
+
+	switch header.Type {
+	case PacketTypeAuthen:
+		respBody, respType = s.authenErrorResponse("session terminated")
+	case PacketTypeAuthor:
+		respBody, respType = s.authorErrorResponse("session terminated")
+	case PacketTypeAcct:
+		respBody, respType = s.acctErrorResponse("session terminated")
+	default:
+		return
+	}
+
+	respHeader := &Header{
+		Version:   header.Version,
+		Type:      respType,
+		SeqNo:     header.SeqNo + 1,
+		Flags:     header.Flags & FlagSingleConnect,
+		SessionID: header.SessionID,
+		Length:    uint32(len(respBody)),
+	}
+
+	if s.writeTimeout > 0 {
+		conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	}
+
+	s.writePacket(conn, respHeader, respBody, secret, isTLS)
+}
+
 func (s *Server) handleConnection(conn Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -374,17 +482,11 @@ func (s *Server) handleConnection(conn Conn) {
 	// RFC 9887: Detect if connection is TLS-secured
 	isTLS := IsTLSConn(conn)
 	if isTLS {
-		if tc, ok := conn.(TLSConn); ok {
-			// Complete TLS handshake before reading connection state,
-			// so PeerCertificates and other fields are populated.
-			if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
-				if err := hs.HandshakeContext(ctx); err != nil {
-					return
-				}
-			}
-			state := tc.ConnectionState()
-			secretReq.TLSState = &state
+		tlsState, err := s.completeTLSHandshake(ctx, conn)
+		if err != nil {
+			return
 		}
+		secretReq.TLSState = tlsState
 	}
 
 	secretResp := s.getSecret(ctx, secretReq)
@@ -398,12 +500,12 @@ func (s *Server) handleConnection(conn Conn) {
 	secretResolved := false
 
 	// Use connection-local session map to prevent cross-client session hijacking
-	// Also mirror to sessionStore for custom store support (metrics, persistence)
 	localSessions := make(map[uint32]*Session)
+	trackingIDs := make(map[uint32]uint64)
 	defer func() {
-		// Clean up all sessions on connection close
-		for id := range localSessions {
-			s.sessionStore.Delete(id)
+		// Clean up all tracked sessions on connection close
+		for _, trackingID := range trackingIDs {
+			s.activeSessions.Delete(trackingID)
 		}
 	}()
 
@@ -421,41 +523,39 @@ func (s *Server) handleConnection(conn Conn) {
 
 		var header *Header
 		var body []byte
-		var err error
 
 		if secretResolved || totalAttempts <= 1 {
-			// Fast path: single secret or already resolved
+			var err error
 			header, body, err = s.readPacket(conn, secret, isTLS)
 			if err != nil {
-				if errors.Is(err, io.EOF) || isNetClosedError(err) {
-					return
-				}
 				return
 			}
 		} else {
-			// Rotation path: try multiple secrets on the first packet
+			var err error
 			header, body, err = s.readRawPacket(conn, len(secret) > 0, isTLS)
 			if err != nil {
-				if errors.Is(err, io.EOF) || isNetClosedError(err) {
-					return
-				}
 				return
 			}
-
 			body, secret, userData = s.resolveSecret(ctx, secretReq, header, body, secret, userData, totalAttempts, isTLS)
 			secretResolved = true
 		}
 
 		// Get or create session (scoped to this connection for security)
 		session, exists := localSessions[header.SessionID]
-		// Call sessionStore.Get() to allow custom stores to participate
-		// (e.g., metrics, policy enforcement, access tracking)
-		_, _ = s.sessionStore.Get(header.SessionID)
 		if !exists {
-			// Create new local session for security (prevents cross-connection hijacking)
 			session = NewSessionWithID(header.SessionID, false)
 			localSessions[header.SessionID] = session
-			s.sessionStore.Put(session)
+			s.registerSession(header, remoteAddr, localAddr, userData, secretReq.TLSState, trackingIDs)
+		}
+
+		// Check if session was kicked
+		if s.isSessionKicked(trackingIDs[header.SessionID]) {
+			s.sendKickedResponse(conn, header, secret, isTLS)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			if header.Flags&FlagSingleConnect == 0 {
+				return
+			}
+			continue
 		}
 
 		// Validate and update sequence number
@@ -463,6 +563,13 @@ func (s *Server) handleConnection(conn Conn) {
 			return
 		}
 		session.UpdateSeqNo(header.SeqNo)
+
+		// Mark tracked session as active once the first packet is accepted
+		if trackingID, ok := trackingIDs[header.SessionID]; ok {
+			if ts, loaded := s.activeSessions.Load(trackingID); loaded {
+				ts.(*trackedSession).state.CompareAndSwap(uint32(SessionStateNew), uint32(SessionStateActive))
+			}
+		}
 
 		// Process packet based on type
 		ctx := context.Background()
@@ -488,6 +595,13 @@ func (s *Server) handleConnection(conn Conn) {
 		// Set session state based on response (Complete for success, Error for failures)
 		if sessionState != SessionStateActive {
 			session.SetState(sessionState)
+		}
+
+		// Update tracked session state atomically
+		if trackingID, ok := trackingIDs[header.SessionID]; ok {
+			if ts, loaded := s.activeSessions.Load(trackingID); loaded {
+				ts.(*trackedSession).state.Store(uint32(sessionState))
+			}
 		}
 
 		// Get next sequence number
@@ -521,11 +635,9 @@ func (s *Server) handleConnection(conn Conn) {
 
 		// Clean up completed sessions to prevent unbounded growth in single-connect mode
 		if session.State() == SessionStateComplete || session.State() == SessionStateError {
-			delete(localSessions, header.SessionID)
-			s.sessionStore.Delete(header.SessionID)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
 
 			// Close connection if not single-connect mode
-			// Single-connect mode allows multiple sessions on one connection
 			if header.Flags&FlagSingleConnect == 0 {
 				return
 			}

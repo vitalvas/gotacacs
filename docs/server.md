@@ -40,7 +40,6 @@ if err := server.Serve(); err != nil {
 | `WithAuthenticationHandler(handler)` | Authentication-only handler | None |
 | `WithAuthorizationHandler(handler)` | Authorization-only handler | None |
 | `WithAccountingHandler(handler)` | Accounting-only handler | None |
-| `WithServerSessionStore(store)` | Session storage implementation | MemorySessionStore |
 | `WithServerReadTimeout(duration)` | Read timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
 
@@ -580,52 +579,49 @@ server := gotacacs.NewServer(
 )
 ```
 
-## Session Store
+## Active Session Tracking
 
-The server uses a session store to track active sessions:
+The server tracks all active sessions and provides methods to list and terminate them.
+
+### SessionInfo
 
 ```go
-type SessionStore interface {
-    Get(sessionID uint32) (*Session, bool)
-    Set(sessionID uint32, session *Session)
-    Delete(sessionID uint32)
+type SessionInfo struct {
+    TrackingID uint64            // Unique server-wide identifier
+    SessionID  uint32            // TACACS+ session ID from the NAS (may collide across connections)
+    RemoteAddr net.Addr          // Client address
+    LocalAddr  net.Addr          // Server address
+    UserData   map[string]string // Custom data from SecretProvider
+    TLSState   *tls.ConnectionState // TLS state (nil for non-TLS)
+    PacketType uint8             // Packet type (authen, author, acct)
+    State      SessionState      // Current session state
+    StartedAt  time.Time         // When the session was created
 }
 ```
 
-### Default Memory Store
+`TrackingID` is a monotonic counter unique across all connections. Use it for `KickSession()`. `SessionID` is the TACACS+ session ID chosen by the NAS — it is only unique per connection.
+
+### Listing Active Sessions
 
 ```go
-store := gotacacs.NewMemorySessionStore()
-
-server := gotacacs.NewServer(
-    gotacacs.WithServerListener(ln),
-    gotacacs.WithServerSecret("sharedsecret"),
-    gotacacs.WithServerSessionStore(store),
-    gotacacs.WithHandler(handler),
-)
+sessions := server.Sessions()
+for _, s := range sessions {
+    fmt.Printf("tracking=%d session=%d remote=%s type=%d state=%s\n",
+        s.TrackingID, s.SessionID, s.RemoteAddr, s.PacketType, s.State)
+}
 ```
 
-### Custom Session Store
-
-Implement for distributed deployments (Redis, database, etc.):
+### Kicking a Session
 
 ```go
-type redisSessionStore struct {
-    client *redis.Client
-}
-
-func (s *redisSessionStore) Get(sessionID uint32) (*gotacacs.Session, bool) {
-    // Retrieve from Redis
-}
-
-func (s *redisSessionStore) Set(sessionID uint32, session *gotacacs.Session) {
-    // Store in Redis
-}
-
-func (s *redisSessionStore) Delete(sessionID uint32) {
-    // Delete from Redis
+if server.KickSession(trackingID) {
+    fmt.Println("session marked for termination")
 }
 ```
+
+The kicked session receives an error response on its next packet. In single-connect mode, only the kicked session is terminated — the connection stays alive for other sessions. In non-single-connect mode, the connection closes after the error response.
+
+For idle sessions (waiting for client input in multi-step auth), the error is sent when the client sends its next packet.
 
 ## Listeners
 
