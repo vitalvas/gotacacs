@@ -169,6 +169,7 @@ type AuthenRequest struct {
     Start      *AuthenStart     // Authentication start data
     SessionID  uint32           // Session identifier
     RemoteAddr net.Addr         // Client address
+    LocalAddr  net.Addr         // Server address
     UserData   map[string]string // Custom data from SecretProvider
 }
 ```
@@ -181,6 +182,7 @@ type AuthenContinueRequest struct {
     Continue   *AuthenContinue  // Continue data with user input
     SessionID  uint32           // Session identifier
     RemoteAddr net.Addr         // Client address
+    LocalAddr  net.Addr         // Server address
     UserData   map[string]string // Custom data from SecretProvider
 }
 ```
@@ -193,6 +195,7 @@ type AuthorRequestContext struct {
     Request    *AuthorRequest   // Authorization request data
     SessionID  uint32           // Session identifier
     RemoteAddr net.Addr         // Client address
+    LocalAddr  net.Addr         // Server address
     UserData   map[string]string // Custom data from SecretProvider
 }
 ```
@@ -205,6 +208,7 @@ type AcctRequestContext struct {
     Request    *AcctRequest     // Accounting request data
     SessionID  uint32           // Session identifier
     RemoteAddr net.Addr         // Client address
+    LocalAddr  net.Addr         // Server address
     UserData   map[string]string // Custom data from SecretProvider
 }
 ```

@@ -54,6 +54,7 @@ func (f SecretProviderFunc) GetSecret(ctx context.Context, req SecretRequest) Se
 type AuthenRequest struct {
 	SessionID  uint32
 	RemoteAddr net.Addr
+	LocalAddr  net.Addr
 	Header     *Header
 	Start      *AuthenStart
 	UserData   map[string]string
@@ -63,6 +64,7 @@ type AuthenRequest struct {
 type AuthenContinueRequest struct {
 	SessionID  uint32
 	RemoteAddr net.Addr
+	LocalAddr  net.Addr
 	Header     *Header
 	Continue   *AuthenContinue
 	UserData   map[string]string
@@ -72,6 +74,7 @@ type AuthenContinueRequest struct {
 type AuthorRequestContext struct {
 	SessionID  uint32
 	RemoteAddr net.Addr
+	LocalAddr  net.Addr
 	Header     *Header
 	Request    *AuthorRequest
 	UserData   map[string]string
@@ -81,6 +84,7 @@ type AuthorRequestContext struct {
 type AcctRequestContext struct {
 	SessionID  uint32
 	RemoteAddr net.Addr
+	LocalAddr  net.Addr
 	Header     *Header
 	Request    *AcctRequest
 	UserData   map[string]string
@@ -366,6 +370,7 @@ func (s *Server) handleConnection(conn Conn) {
 	userData := secretResp.UserData
 	totalAttempts := max(secretResp.Attempts, 0)
 	remoteAddr := secretReq.RemoteAddr
+	localAddr := secretReq.LocalAddr
 
 	// RFC 9887: Detect if connection is TLS-secured
 	isTLS := IsTLSConn(conn)
@@ -448,11 +453,11 @@ func (s *Server) handleConnection(conn Conn) {
 
 		switch header.Type {
 		case PacketTypeAuthen:
-			respBody, respType, sessionState = s.handleAuthenPacketWithState(ctx, header, body, remoteAddr, userData)
+			respBody, respType, sessionState = s.handleAuthenPacketWithState(ctx, header, body, remoteAddr, localAddr, userData)
 		case PacketTypeAuthor:
-			respBody, respType, sessionState = s.handleAuthorPacket(ctx, header, body, remoteAddr, userData)
+			respBody, respType, sessionState = s.handleAuthorPacket(ctx, header, body, remoteAddr, localAddr, userData)
 		case PacketTypeAcct:
-			respBody, respType, sessionState = s.handleAcctPacket(ctx, header, body, remoteAddr, userData)
+			respBody, respType, sessionState = s.handleAcctPacket(ctx, header, body, remoteAddr, localAddr, userData)
 		default:
 			return
 		}
@@ -662,11 +667,11 @@ func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []by
 	return nil
 }
 
-func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	if header.SeqNo == 1 {
-		return s.handleAuthenStart(ctx, header, body, remoteAddr, userData)
+		return s.handleAuthenStart(ctx, header, body, remoteAddr, localAddr, userData)
 	}
-	return s.handleAuthenContinue(ctx, header, body, remoteAddr, userData)
+	return s.handleAuthenContinue(ctx, header, body, remoteAddr, localAddr, userData)
 }
 
 // handleAuthenPacketWithState processes authentication packets and returns session state.
@@ -676,8 +681,8 @@ func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []
 // - FAIL, ERROR: SessionStateError
 // - GETDATA, GETUSER, GETPASS: SessionStateActive (session continues)
 // - Other terminal statuses (FOLLOW, RESTART): SessionStateComplete
-func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
-	respBody, respType := s.handleAuthenPacket(ctx, header, body, remoteAddr, userData)
+func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
+	respBody, respType := s.handleAuthenPacket(ctx, header, body, remoteAddr, localAddr, userData)
 
 	// Parse reply to determine session state
 	if len(respBody) > 0 {
@@ -703,7 +708,7 @@ func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
 	return respBody, PacketTypeAuthen
 }
 
-func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	start := &AuthenStart{}
 	if err := start.UnmarshalBinary(body); err != nil {
 		if errors.Is(err, ErrBadSecret) {
@@ -716,7 +721,7 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	}
 
 	req := &AuthenRequest{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr,
+		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Start: start, UserData: userData,
 	}
 	reply := s.authenHandler.HandleAuthenStart(ctx, req)
@@ -727,7 +732,7 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	return respBody, PacketTypeAuthen
 }
 
-func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
 	cont := &AuthenContinue{}
 	if err := cont.UnmarshalBinary(body); err != nil {
 		if errors.Is(err, ErrBadSecret) {
@@ -740,7 +745,7 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 	}
 
 	req := &AuthenContinueRequest{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr,
+		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Continue: cont, UserData: userData,
 	}
 	reply := s.authenHandler.HandleAuthenContinue(ctx, req)
@@ -757,7 +762,7 @@ func (s *Server) authorErrorResponse(msg string) ([]byte, uint8) {
 	return respBody, PacketTypeAuthor
 }
 
-func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
+func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
 	request := &AuthorRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid authorization request"
@@ -773,7 +778,7 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 	}
 
 	req := &AuthorRequestContext{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr,
+		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Request: request, UserData: userData,
 	}
 	resp := s.authorHandler.HandleAuthorRequest(ctx, req)
@@ -797,7 +802,7 @@ func (s *Server) acctErrorResponse(msg string) ([]byte, uint8) {
 	return respBody, PacketTypeAcct
 }
 
-func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, remoteAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
+func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
 	request := &AcctRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid accounting request"
@@ -813,7 +818,7 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 	}
 
 	req := &AcctRequestContext{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr,
+		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
 		Header: header, Request: request, UserData: userData,
 	}
 	resp := s.acctHandler.HandleAcctRequest(ctx, req)
