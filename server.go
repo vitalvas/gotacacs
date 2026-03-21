@@ -522,6 +522,18 @@ func (s *Server) KickSession(trackingID uint64) bool {
 	return true
 }
 
+// connState holds per-connection state passed to internal handler methods.
+type connState struct {
+	remoteAddr    net.Addr
+	localAddr     net.Addr
+	userData      map[string]string
+	tlsState      *tls.ConnectionState
+	secret        []byte
+	isTLS         bool
+	totalAttempts int
+	secretReq     SecretRequest
+}
+
 // completeTLSHandshake completes the TLS handshake and returns the connection state.
 func (s *Server) completeTLSHandshake(ctx context.Context, conn Conn) (*tls.ConnectionState, error) {
 	if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
@@ -537,16 +549,16 @@ func (s *Server) completeTLSHandshake(ctx context.Context, conn Conn) (*tls.Conn
 }
 
 // registerSession registers a new session in the active sessions tracker.
-func (s *Server) registerSession(header *Header, remoteAddr, localAddr net.Addr, userData map[string]string, tlsState *tls.ConnectionState, trackingIDs map[uint32]uint64) {
+func (s *Server) registerSession(header *Header, cs *connState, trackingIDs map[uint32]uint64) {
 	trackingID := s.nextTrackingID.Add(1)
 	trackingIDs[header.SessionID] = trackingID
 	info := SessionInfo{
 		TrackingID: trackingID,
 		SessionID:  header.SessionID,
-		RemoteAddr: remoteAddr,
-		LocalAddr:  localAddr,
-		UserData:   userData,
-		TLSState:   tlsState,
+		RemoteAddr: cs.remoteAddr,
+		LocalAddr:  cs.localAddr,
+		UserData:   cs.userData,
+		TLSState:   cs.tlsState,
 		PacketType: header.Type,
 		StartedAt:  time.Now(),
 	}
@@ -637,16 +649,21 @@ func (s *Server) handleConnection(conn Conn) {
 	}
 
 	secretResp := s.getSecret(ctx, secretReq)
-	secret := secretResp.Secret
-	userData := secretResp.UserData
-	totalAttempts := max(secretResp.Attempts, 0)
-	remoteAddr := secretReq.RemoteAddr
-	localAddr := secretReq.LocalAddr
+	cs := &connState{
+		remoteAddr:    secretReq.RemoteAddr,
+		localAddr:     secretReq.LocalAddr,
+		userData:      secretResp.UserData,
+		tlsState:      secretReq.TLSState,
+		secret:        secretResp.Secret,
+		isTLS:         isTLS,
+		totalAttempts: max(secretResp.Attempts, 0),
+		secretReq:     secretReq,
+	}
 
 	// Secret rotation: resolved after first packet when multiple secrets are available
 	secretResolved := false
 
-	s.fireConnect(remoteAddr, localAddr, secretReq.TLSState)
+	s.fireConnect(cs.remoteAddr, cs.localAddr, cs.tlsState)
 
 	// Use connection-local session map to prevent cross-client session hijacking
 	localSessions := make(map[uint32]*Session)
@@ -655,7 +672,7 @@ func (s *Server) handleConnection(conn Conn) {
 		for sessionID := range localSessions {
 			s.cleanupSession(sessionID, localSessions, trackingIDs)
 		}
-		s.fireDisconnect(remoteAddr, localAddr)
+		s.fireDisconnect(cs.remoteAddr, cs.localAddr)
 	}()
 
 	for {
@@ -673,21 +690,21 @@ func (s *Server) handleConnection(conn Conn) {
 		var header *Header
 		var body []byte
 
-		if secretResolved || totalAttempts <= 1 {
+		if secretResolved || cs.totalAttempts <= 1 {
 			var err error
-			header, body, err = s.readPacket(conn, secret, isTLS)
+			header, body, err = s.readPacket(conn, cs.secret, cs.isTLS)
 			if err != nil {
-				s.fireReadError(err, remoteAddr, localAddr)
+				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
 				return
 			}
 		} else {
 			var err error
-			header, body, err = s.readRawPacket(conn, len(secret) > 0, isTLS)
+			header, body, err = s.readRawPacket(conn, len(cs.secret) > 0, cs.isTLS)
 			if err != nil {
-				s.fireReadError(err, remoteAddr, localAddr)
+				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
 				return
 			}
-			body, secret, userData = s.resolveSecret(ctx, secretReq, header, body, secret, userData, totalAttempts, isTLS)
+			body = s.resolveSecret(ctx, header, body, cs)
 			secretResolved = true
 		}
 
@@ -696,12 +713,12 @@ func (s *Server) handleConnection(conn Conn) {
 		if !exists {
 			session = NewSessionWithID(header.SessionID, false)
 			localSessions[header.SessionID] = session
-			s.registerSession(header, remoteAddr, localAddr, userData, secretReq.TLSState, trackingIDs)
+			s.registerSession(header, cs, trackingIDs)
 		}
 
 		// Check if session was kicked
 		if s.isSessionKicked(trackingIDs[header.SessionID]) {
-			s.sendKickedResponse(conn, header, secret, isTLS)
+			s.sendKickedResponse(conn, header, cs.secret, cs.isTLS)
 			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
 			if header.Flags&FlagSingleConnect == 0 {
 				return
@@ -730,11 +747,11 @@ func (s *Server) handleConnection(conn Conn) {
 
 		switch header.Type {
 		case PacketTypeAuthen:
-			respBody, respType, sessionState = s.handleAuthenPacketWithState(ctx, header, body, remoteAddr, localAddr, userData)
+			respBody, respType, sessionState = s.handleAuthenPacketWithState(ctx, header, body, cs)
 		case PacketTypeAuthor:
-			respBody, respType, sessionState = s.handleAuthorPacket(ctx, header, body, remoteAddr, localAddr, userData)
+			respBody, respType, sessionState = s.handleAuthorPacket(ctx, header, body, cs)
 		case PacketTypeAcct:
-			respBody, respType, sessionState = s.handleAcctPacket(ctx, header, body, remoteAddr, localAddr, userData)
+			respBody, respType, sessionState = s.handleAcctPacket(ctx, header, body, cs)
 		default:
 			return
 		}
@@ -780,7 +797,7 @@ func (s *Server) handleConnection(conn Conn) {
 			conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 		}
 
-		if err := s.writePacket(conn, respHeader, respBody, secret, isTLS); err != nil {
+		if err := s.writePacket(conn, respHeader, respBody, cs.secret, cs.isTLS); err != nil {
 			return
 		}
 
@@ -804,42 +821,38 @@ func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretRespons
 }
 
 // resolveSecret tries each secret in order until one successfully deobfuscates and validates
-// the packet. Returns the deobfuscated body and the resolved secret/userData.
+// the packet. Returns the deobfuscated body. On success, updates cs.secret and cs.userData.
 // If all secrets fail, returns the body deobfuscated with the first secret
 // so the handler produces a standard "bad secret" response.
-func (s *Server) resolveSecret(ctx context.Context, baseReq SecretRequest, header *Header, rawBody, firstSecret []byte, firstUserData map[string]string, totalAttempts int, isTLS bool) (body, secret []byte, userData map[string]string) {
-	for i := range totalAttempts {
+func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []byte, cs *connState) []byte {
+	for i := range cs.totalAttempts {
 		var attemptSecret []byte
 		var attemptUserData map[string]string
 		if i == 0 {
-			attemptSecret = firstSecret
-			attemptUserData = firstUserData
+			attemptSecret = cs.secret
+			attemptUserData = cs.userData
 		} else {
-			req := baseReq
+			req := cs.secretReq
 			req.Attempt = i
 			resp := s.getSecret(ctx, req)
 			attemptSecret = resp.Secret
 			attemptUserData = resp.UserData
 		}
 
-		deobBody, validateErr := s.deobfuscateAndValidate(header, rawBody, attemptSecret, isTLS)
+		deobBody, validateErr := s.deobfuscateAndValidate(header, rawBody, attemptSecret, cs.isTLS)
 		if validateErr == nil || !errors.Is(validateErr, ErrBadSecret) {
-			return deobBody, attemptSecret, attemptUserData
+			cs.secret = attemptSecret
+			cs.userData = attemptUserData
+			return deobBody
 		}
 	}
 
 	// All secrets failed: deobfuscate with the first secret
-	if s.hooks.OnBadSecret != nil {
-		s.hooks.OnBadSecret(BadSecretEvent{
-			RemoteAddr: baseReq.RemoteAddr,
-			LocalAddr:  baseReq.LocalAddr,
-		})
+	s.fireBadSecret(cs.remoteAddr, cs.localAddr)
+	if !cs.isTLS && header.Flags&FlagUnencrypted == 0 && len(cs.secret) > 0 {
+		return Obfuscate(header, cs.secret, rawBody)
 	}
-	body = rawBody
-	if !isTLS && header.Flags&FlagUnencrypted == 0 && len(firstSecret) > 0 {
-		body = Obfuscate(header, firstSecret, rawBody)
-	}
-	return body, firstSecret, firstUserData
+	return rawBody
 }
 
 func (s *Server) readRawPacket(conn Conn, hasSecret, isTLS bool) (*Header, []byte, error) {
@@ -953,22 +966,16 @@ func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []by
 	return nil
 }
 
-func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
 	if header.SeqNo == 1 {
-		return s.handleAuthenStart(ctx, header, body, remoteAddr, localAddr, userData)
+		return s.handleAuthenStart(ctx, header, body, cs)
 	}
-	return s.handleAuthenContinue(ctx, header, body, remoteAddr, localAddr, userData)
+	return s.handleAuthenContinue(ctx, header, body, cs)
 }
 
 // handleAuthenPacketWithState processes authentication packets and returns session state.
-// Returns (response body, packet type, session state).
-// Session state is determined by the reply status:
-// - PASS: SessionStateComplete
-// - FAIL, ERROR: SessionStateError
-// - GETDATA, GETUSER, GETPASS: SessionStateActive (session continues)
-// - Other terminal statuses (FOLLOW, RESTART): SessionStateComplete
-func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
-	respBody, respType := s.handleAuthenPacket(ctx, header, body, remoteAddr, localAddr, userData)
+func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
+	respBody, respType := s.handleAuthenPacket(ctx, header, body, cs)
 
 	// Parse reply to determine session state
 	if len(respBody) > 0 {
@@ -1037,29 +1044,29 @@ func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
 
 // handleUnmarshalError fires the appropriate hook and returns an error response for
 // authen packet unmarshal failures. Returns nil if there was no error.
-func (s *Server) handleUnmarshalError(err error, remoteAddr, localAddr net.Addr, errMsg string) ([]byte, uint8, bool) {
+func (s *Server) handleUnmarshalError(err error, cs *connState, errMsg string) ([]byte, uint8, bool) {
 	if err == nil {
 		return nil, 0, false
 	}
 	if errors.Is(err, ErrBadSecret) {
-		s.fireBadSecret(remoteAddr, localAddr)
+		s.fireBadSecret(cs.remoteAddr, cs.localAddr)
 		resp, ptype := s.authenErrorResponse("bad secret")
 		return resp, ptype, true
 	}
-	s.firePacketError(remoteAddr, localAddr, err)
+	s.firePacketError(cs.remoteAddr, cs.localAddr, err)
 	resp, ptype := s.authenErrorResponse(errMsg)
 	return resp, ptype, true
 }
 
-func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
 	start := &AuthenStart{}
-	if resp, ptype, handled := s.handleUnmarshalError(start.UnmarshalBinary(body), remoteAddr, localAddr, "invalid START packet"); handled {
+	if resp, ptype, handled := s.handleUnmarshalError(start.UnmarshalBinary(body), cs, "invalid START packet"); handled {
 		return resp, ptype
 	}
 
 	req := &AuthenRequest{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
-		Header: header, Start: start, UserData: userData,
+		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
+		Header: header, Start: start, UserData: cs.userData,
 	}
 	reply := s.handler.HandleAuthenStart(ctx, req)
 	if reply == nil {
@@ -1069,15 +1076,15 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	return respBody, PacketTypeAuthen
 }
 
-func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8) {
+func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
 	cont := &AuthenContinue{}
-	if resp, ptype, handled := s.handleUnmarshalError(cont.UnmarshalBinary(body), remoteAddr, localAddr, "invalid CONTINUE packet"); handled {
+	if resp, ptype, handled := s.handleUnmarshalError(cont.UnmarshalBinary(body), cs, "invalid CONTINUE packet"); handled {
 		return resp, ptype
 	}
 
 	req := &AuthenContinueRequest{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
-		Header: header, Continue: cont, UserData: userData,
+		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
+		Header: header, Continue: cont, UserData: cs.userData,
 	}
 	reply := s.handler.HandleAuthenContinue(ctx, req)
 	if reply == nil {
@@ -1093,23 +1100,23 @@ func (s *Server) authorErrorResponse(msg string) ([]byte, uint8) {
 	return respBody, PacketTypeAuthor
 }
 
-func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
+func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
 	request := &AuthorRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid authorization request"
 		if errors.Is(err, ErrBadSecret) {
-			s.fireBadSecret(remoteAddr, localAddr)
+			s.fireBadSecret(cs.remoteAddr, cs.localAddr)
 			msg = "bad secret"
 		} else {
-			s.firePacketError(remoteAddr, localAddr, err)
+			s.firePacketError(cs.remoteAddr, cs.localAddr, err)
 		}
 		respBody, respType := s.authorErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
 
 	req := &AuthorRequestContext{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
-		Header: header, Request: request, UserData: userData,
+		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
+		Header: header, Request: request, UserData: cs.userData,
 	}
 	resp := s.handler.HandleAuthorRequest(ctx, req)
 	if resp == nil {
@@ -1132,23 +1139,23 @@ func (s *Server) acctErrorResponse(msg string) ([]byte, uint8) {
 	return respBody, PacketTypeAcct
 }
 
-func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, remoteAddr, localAddr net.Addr, userData map[string]string) ([]byte, uint8, SessionState) {
+func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
 	request := &AcctRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid accounting request"
 		if errors.Is(err, ErrBadSecret) {
-			s.fireBadSecret(remoteAddr, localAddr)
+			s.fireBadSecret(cs.remoteAddr, cs.localAddr)
 			msg = "bad secret"
 		} else {
-			s.firePacketError(remoteAddr, localAddr, err)
+			s.firePacketError(cs.remoteAddr, cs.localAddr, err)
 		}
 		respBody, respType := s.acctErrorResponse(msg)
 		return respBody, respType, SessionStateError
 	}
 
 	req := &AcctRequestContext{
-		SessionID: header.SessionID, RemoteAddr: remoteAddr, LocalAddr: localAddr,
-		Header: header, Request: request, UserData: userData,
+		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
+		Header: header, Request: request, UserData: cs.userData,
 	}
 	resp := s.handler.HandleAcctRequest(ctx, req)
 	if resp == nil {
