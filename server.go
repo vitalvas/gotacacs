@@ -40,6 +40,8 @@ type SecretResponse struct {
 	// A value of 0 or 1 means no rotation (single secret).
 	// When greater than 1, the server will try each secret in order
 	// on the first packet of a connection until one succeeds.
+	// The provider's GetSecret will be called with Attempt values from
+	// 0 to Attempts-1; the provider must handle all values in this range.
 	Attempts int
 }
 
@@ -290,10 +292,13 @@ func WithServerSecret(secret string) ServerOption {
 }
 
 // WithServerSecretBytes sets a static secret for all clients.
+// The input slice is copied to prevent mutations from affecting the server.
 func WithServerSecretBytes(secret []byte) ServerOption {
+	cp := make([]byte, len(secret))
+	copy(cp, secret)
 	return func(s *Server) {
 		s.secretProvider = SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
-			return SecretResponse{Secret: secret}
+			return SecretResponse{Secret: cp}
 		})
 	}
 }
@@ -374,9 +379,13 @@ type Server struct {
 
 	running        bool
 	shutdownCh     chan struct{}
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 	wg             sync.WaitGroup
+	activeConns    sync.Map // map of net.Conn for forcible close on shutdown
 	activeSessions sync.Map
 	nextTrackingID atomic.Uint64
+	nextConnID     atomic.Uint64
 }
 
 // NewServer creates a new TACACS+ server with the given options.
@@ -385,7 +394,6 @@ func NewServer(opts ...ServerOption) *Server {
 		readTimeout:   30 * time.Second,
 		writeTimeout:  30 * time.Second,
 		maxBodyLength: DefaultMaxBodyLength,
-		shutdownCh:    make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -416,6 +424,7 @@ func WithServerMaxBodyLength(maxLength uint32) ServerOption {
 
 // Serve starts accepting connections on the configured listener.
 // This method blocks until the server is shut down.
+// A server can be restarted by calling Serve again after Shutdown completes.
 func (s *Server) Serve() error {
 	if s.listener == nil {
 		return errors.New("no listener configured")
@@ -427,6 +436,8 @@ func (s *Server) Serve() error {
 		return errors.New("server already running")
 	}
 	s.running = true
+	s.shutdownCh = make(chan struct{})
+	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
 	s.mu.Unlock()
 
 	for {
@@ -436,6 +447,9 @@ func (s *Server) Serve() error {
 			case <-s.shutdownCh:
 				return nil
 			default:
+				s.mu.Lock()
+				s.running = false
+				s.mu.Unlock()
 				return fmt.Errorf("accept error: %w", err)
 			}
 		}
@@ -446,6 +460,9 @@ func (s *Server) Serve() error {
 }
 
 // Shutdown gracefully shuts down the server.
+// It stops accepting new connections, signals active handlers via context,
+// and waits for connections to finish. If the provided context expires,
+// active connections are forcibly closed.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.running {
@@ -453,9 +470,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	s.running = false
+	shutdownCancel := s.shutdownCancel
 	s.mu.Unlock()
 
 	close(s.shutdownCh)
+	shutdownCancel()
 
 	if s.listener != nil {
 		s.listener.Close()
@@ -472,6 +491,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		// Forcibly close all active connections to unblock pending I/O
+		s.activeConns.Range(func(_, value any) bool {
+			value.(net.Conn).Close()
+			return true
+		})
+		// Wait for handler goroutines to finish after force close
+		<-done
 		return ctx.Err()
 	}
 }
@@ -522,6 +548,16 @@ func (s *Server) KickSession(trackingID uint64) bool {
 	return true
 }
 
+// copyUserData returns a shallow copy of the map, safe for handler mutation.
+func copyUserData(ud map[string]string) map[string]string {
+	if ud == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(ud))
+	maps.Copy(cp, ud)
+	return cp
+}
+
 // connState holds per-connection state passed to internal handler methods.
 type connState struct {
 	remoteAddr    net.Addr
@@ -535,7 +571,7 @@ type connState struct {
 }
 
 // completeTLSHandshake completes the TLS handshake and returns the connection state.
-func (s *Server) completeTLSHandshake(ctx context.Context, conn Conn) (*tls.ConnectionState, error) {
+func (s *Server) completeTLSHandshake(ctx context.Context, conn net.Conn) (*tls.ConnectionState, error) {
 	if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
 		if err := hs.HandshakeContext(ctx); err != nil {
 			return nil, err
@@ -557,7 +593,7 @@ func (s *Server) registerSession(header *Header, cs *connState, trackingIDs map[
 		SessionID:  header.SessionID,
 		RemoteAddr: cs.remoteAddr,
 		LocalAddr:  cs.localAddr,
-		UserData:   cs.userData,
+		UserData:   copyUserData(cs.userData),
 		TLSState:   cs.tlsState,
 		PacketType: header.Type,
 		StartedAt:  time.Now(),
@@ -596,8 +632,35 @@ func (s *Server) cleanupSession(sessionID uint32, localSessions map[uint32]*Sess
 	}
 }
 
+// updateTrackedState updates the tracked session state atomically.
+func (s *Server) updateTrackedState(trackingIDs map[uint32]uint64, sessionID uint32, state SessionState) {
+	if trackingID, ok := trackingIDs[sessionID]; ok {
+		if ts, loaded := s.activeSessions.Load(trackingID); loaded {
+			ts.(*trackedSession).state.Store(uint32(state))
+		}
+	}
+}
+
+// cleanupConnection marks remaining active sessions as errored and cleans them up.
+func (s *Server) cleanupConnection(localSessions map[uint32]*Session, trackingIDs map[uint32]uint64, cs *connState) {
+	for _, trackingID := range trackingIDs {
+		if ts, loaded := s.activeSessions.Load(trackingID); loaded {
+			ts.(*trackedSession).state.CompareAndSwap(
+				uint32(SessionStateActive), uint32(SessionStateError),
+			)
+			ts.(*trackedSession).state.CompareAndSwap(
+				uint32(SessionStateNew), uint32(SessionStateError),
+			)
+		}
+	}
+	for sessionID := range localSessions {
+		s.cleanupSession(sessionID, localSessions, trackingIDs)
+	}
+	s.fireDisconnect(cs.remoteAddr, cs.localAddr)
+}
+
 // sendKickedResponse sends an error response for a kicked session.
-func (s *Server) sendKickedResponse(conn Conn, header *Header, secret []byte, isTLS bool) {
+func (s *Server) sendKickedResponse(conn net.Conn, header *Header, secret []byte, isTLS bool) {
 	var respBody []byte
 	var respType uint8
 
@@ -628,11 +691,15 @@ func (s *Server) sendKickedResponse(conn Conn, header *Header, secret []byte, is
 	s.writePacket(conn, respHeader, respBody, secret, isTLS)
 }
 
-func (s *Server) handleConnection(conn Conn) {
+func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
-	ctx := context.Background()
+	connID := s.nextConnID.Add(1)
+	s.activeConns.Store(connID, conn)
+	defer s.activeConns.Delete(connID)
+
+	ctx := s.shutdownCtx
 	secretReq := SecretRequest{
 		RemoteAddr: conn.RemoteAddr(),
 		LocalAddr:  conn.LocalAddr(),
@@ -669,10 +736,7 @@ func (s *Server) handleConnection(conn Conn) {
 	localSessions := make(map[uint32]*Session)
 	trackingIDs := make(map[uint32]uint64)
 	defer func() {
-		for sessionID := range localSessions {
-			s.cleanupSession(sessionID, localSessions, trackingIDs)
-		}
-		s.fireDisconnect(cs.remoteAddr, cs.localAddr)
+		s.cleanupConnection(localSessions, trackingIDs, cs)
 	}()
 
 	for {
@@ -740,7 +804,6 @@ func (s *Server) handleConnection(conn Conn) {
 		}
 
 		// Process packet based on type
-		ctx := context.Background()
 		var respBody []byte
 		var respType uint8
 		var sessionState SessionState
@@ -764,18 +827,14 @@ func (s *Server) handleConnection(conn Conn) {
 		if sessionState != SessionStateActive {
 			session.SetState(sessionState)
 		}
-
-		// Update tracked session state atomically
-		if trackingID, ok := trackingIDs[header.SessionID]; ok {
-			if ts, loaded := s.activeSessions.Load(trackingID); loaded {
-				ts.(*trackedSession).state.Store(uint32(sessionState))
-			}
-		}
+		s.updateTrackedState(trackingIDs, header.SessionID, sessionState)
 
 		// Get next sequence number
 		seqNo, err := session.NextSeqNo()
 		if err != nil {
-			// Sequence number overflow, terminate session
+			session.SetState(SessionStateError)
+			s.updateTrackedState(trackingIDs, header.SessionID, SessionStateError)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
 			return
 		}
 
@@ -855,7 +914,7 @@ func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []by
 	return rawBody
 }
 
-func (s *Server) readRawPacket(conn Conn, hasSecret, isTLS bool) (*Header, []byte, error) {
+func (s *Server) readRawPacket(conn net.Conn, hasSecret, isTLS bool) (*Header, []byte, error) {
 	// Read header
 	headerBuf := make([]byte, HeaderLength)
 	if _, err := io.ReadFull(conn, headerBuf); err != nil {
@@ -901,7 +960,7 @@ func (s *Server) readRawPacket(conn Conn, hasSecret, isTLS bool) (*Header, []byt
 	return header, body, nil
 }
 
-func (s *Server) readPacket(conn Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
+func (s *Server) readPacket(conn net.Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
 	header, body, err := s.readRawPacket(conn, len(secret) > 0, isTLS)
 	if err != nil {
 		return nil, nil, err
@@ -935,7 +994,7 @@ func (s *Server) deobfuscateAndValidate(header *Header, rawBody, secret []byte, 
 	return body, nil
 }
 
-func (s *Server) writePacket(conn Conn, header *Header, body []byte, secret []byte, isTLS bool) error {
+func (s *Server) writePacket(conn net.Conn, header *Header, body []byte, secret []byte, isTLS bool) error {
 	// RFC 9887: Set unencrypted flag on TLS connections
 	if isTLS {
 		header.SetUnencrypted(true)
@@ -1066,7 +1125,7 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 
 	req := &AuthenRequest{
 		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Start: start, UserData: cs.userData,
+		Header: header, Start: start, UserData: copyUserData(cs.userData),
 	}
 	reply := s.handler.HandleAuthenStart(ctx, req)
 	if reply == nil {
@@ -1084,7 +1143,7 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 
 	req := &AuthenContinueRequest{
 		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Continue: cont, UserData: cs.userData,
+		Header: header, Continue: cont, UserData: copyUserData(cs.userData),
 	}
 	reply := s.handler.HandleAuthenContinue(ctx, req)
 	if reply == nil {
@@ -1116,7 +1175,7 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 
 	req := &AuthorRequestContext{
 		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Request: request, UserData: cs.userData,
+		Header: header, Request: request, UserData: copyUserData(cs.userData),
 	}
 	resp := s.handler.HandleAuthorRequest(ctx, req)
 	if resp == nil {
@@ -1155,7 +1214,7 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 
 	req := &AcctRequestContext{
 		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Request: request, UserData: cs.userData,
+		Header: header, Request: request, UserData: copyUserData(cs.userData),
 	}
 	resp := s.handler.HandleAcctRequest(ctx, req)
 	if resp == nil {
@@ -1170,16 +1229,4 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 		state = SessionStateError
 	}
 	return respBody, PacketTypeAcct, state
-}
-
-// isNetClosedError checks if the error is a closed network connection error.
-func isNetClosedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var netErr *net.OpError
-	if errors.As(err, &netErr) {
-		return netErr.Err.Error() == "use of closed network connection"
-	}
-	return false
 }

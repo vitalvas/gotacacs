@@ -15,7 +15,7 @@ type AcctRequest struct {
 	User         []byte   // Username
 	Port         []byte   // Port identifier
 	RemoteAddr   []byte   // Remote address
-	Args         [][]byte // Accounting arguments
+	RawArgs      [][]byte // Accounting arguments
 }
 
 // NewAcctRequest creates a new AcctRequest packet with the specified parameters.
@@ -32,13 +32,13 @@ func NewAcctRequest(flags, authenMethod, authenType, service uint8, user string)
 
 // AddArg adds an argument to the accounting request.
 func (p *AcctRequest) AddArg(arg string) {
-	p.Args = append(p.Args, []byte(arg))
+	p.RawArgs = append(p.RawArgs, []byte(arg))
 }
 
-// GetArgs returns the arguments as strings.
-func (p *AcctRequest) GetArgs() []string {
-	result := make([]string, len(p.Args))
-	for i, arg := range p.Args {
+// Args returns the arguments as strings.
+func (p *AcctRequest) Args() []string {
+	result := make([]string, len(p.RawArgs))
+	for i, arg := range p.RawArgs {
 		result[i] = string(arg)
 	}
 	return result
@@ -64,7 +64,7 @@ func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)
 	portLen := len(p.Port)
 	remAddrLen := len(p.RemoteAddr)
-	argCount := len(p.Args)
+	argCount := len(p.RawArgs)
 
 	if userLen > 255 || portLen > 255 || remAddrLen > 255 {
 		return nil, fmt.Errorf("%w: field length exceeds 255 bytes", ErrInvalidPacket)
@@ -75,7 +75,7 @@ func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 
 	// Calculate total args length and validate individual arg lengths
 	totalArgsLen := 0
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		if len(arg) > 255 {
 			return nil, fmt.Errorf("%w: argument length exceeds 255 bytes", ErrInvalidPacket)
 		}
@@ -99,7 +99,7 @@ func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 	offset := 9
 
 	// Write argument lengths
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		buf[offset] = uint8(len(arg))
 		offset++
 	}
@@ -113,7 +113,7 @@ func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 	offset += remAddrLen
 
 	// Write arguments
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		copy(buf[offset:], arg)
 		offset += len(arg)
 	}
@@ -194,16 +194,16 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 
 	// Read arguments
 	if argCount > 0 {
-		p.Args = make([][]byte, argCount)
+		p.RawArgs = make([][]byte, argCount)
 		for i, argLen := range argLens {
 			if argLen > 0 {
-				p.Args[i] = make([]byte, argLen)
-				copy(p.Args[i], data[offset:offset+argLen])
+				p.RawArgs[i] = make([]byte, argLen)
+				copy(p.RawArgs[i], data[offset:offset+argLen])
 			}
 			offset += argLen
 		}
 	} else {
-		p.Args = nil
+		p.RawArgs = nil
 	}
 
 	return nil

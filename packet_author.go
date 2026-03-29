@@ -14,7 +14,7 @@ type AuthorRequest struct {
 	User         []byte   // Username
 	Port         []byte   // Port identifier
 	RemoteAddr   []byte   // Remote address
-	Args         [][]byte // Authorization arguments
+	RawArgs      [][]byte // Authorization arguments
 }
 
 // NewAuthorRequest creates a new AuthorRequest packet with the specified parameters.
@@ -30,13 +30,13 @@ func NewAuthorRequest(authenMethod, authenType, service uint8, user string) *Aut
 
 // AddArg adds an argument to the authorization request.
 func (p *AuthorRequest) AddArg(arg string) {
-	p.Args = append(p.Args, []byte(arg))
+	p.RawArgs = append(p.RawArgs, []byte(arg))
 }
 
-// GetArgs returns the arguments as strings.
-func (p *AuthorRequest) GetArgs() []string {
-	result := make([]string, len(p.Args))
-	for i, arg := range p.Args {
+// Args returns the arguments as strings.
+func (p *AuthorRequest) Args() []string {
+	result := make([]string, len(p.RawArgs))
+	for i, arg := range p.RawArgs {
 		result[i] = string(arg)
 	}
 	return result
@@ -47,7 +47,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)
 	portLen := len(p.Port)
 	remAddrLen := len(p.RemoteAddr)
-	argCount := len(p.Args)
+	argCount := len(p.RawArgs)
 
 	if userLen > 255 || portLen > 255 || remAddrLen > 255 {
 		return nil, fmt.Errorf("%w: field length exceeds 255 bytes", ErrInvalidPacket)
@@ -58,7 +58,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 
 	// Calculate total args length and validate individual arg lengths
 	totalArgsLen := 0
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		if len(arg) > 255 {
 			return nil, fmt.Errorf("%w: argument length exceeds 255 bytes", ErrInvalidPacket)
 		}
@@ -81,7 +81,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	offset := 8
 
 	// Write argument lengths
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		buf[offset] = uint8(len(arg))
 		offset++
 	}
@@ -95,7 +95,7 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	offset += remAddrLen
 
 	// Write arguments
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		copy(buf[offset:], arg)
 		offset += len(arg)
 	}
@@ -175,16 +175,16 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 
 	// Read arguments
 	if argCount > 0 {
-		p.Args = make([][]byte, argCount)
+		p.RawArgs = make([][]byte, argCount)
 		for i, argLen := range argLens {
 			if argLen > 0 {
-				p.Args[i] = make([]byte, argLen)
-				copy(p.Args[i], data[offset:offset+argLen])
+				p.RawArgs[i] = make([]byte, argLen)
+				copy(p.RawArgs[i], data[offset:offset+argLen])
 			}
 			offset += argLen
 		}
 	} else {
-		p.Args = nil
+		p.RawArgs = nil
 	}
 
 	return nil
@@ -194,7 +194,7 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 // This packet is sent by the server in response to an authorization request.
 type AuthorResponse struct {
 	Status    uint8    // Authorization status
-	Args      [][]byte // Authorization arguments (may be modified from request)
+	RawArgs   [][]byte // Authorization arguments (may be modified from request)
 	ServerMsg []byte   // Server message (optional)
 	Data      []byte   // Additional data (optional)
 }
@@ -208,13 +208,13 @@ func NewAuthorResponse(status uint8) *AuthorResponse {
 
 // AddArg adds an argument to the authorization response.
 func (p *AuthorResponse) AddArg(arg string) {
-	p.Args = append(p.Args, []byte(arg))
+	p.RawArgs = append(p.RawArgs, []byte(arg))
 }
 
-// GetArgs returns the arguments as strings.
-func (p *AuthorResponse) GetArgs() []string {
-	result := make([]string, len(p.Args))
-	for i, arg := range p.Args {
+// Args returns the arguments as strings.
+func (p *AuthorResponse) Args() []string {
+	result := make([]string, len(p.RawArgs))
+	for i, arg := range p.RawArgs {
 		result[i] = string(arg)
 	}
 	return result
@@ -224,7 +224,7 @@ func (p *AuthorResponse) GetArgs() []string {
 func (p *AuthorResponse) MarshalBinary() ([]byte, error) {
 	serverMsgLen := len(p.ServerMsg)
 	dataLen := len(p.Data)
-	argCount := len(p.Args)
+	argCount := len(p.RawArgs)
 
 	if serverMsgLen > 65535 || dataLen > 65535 {
 		return nil, fmt.Errorf("%w: field length exceeds 65535 bytes", ErrInvalidPacket)
@@ -235,7 +235,7 @@ func (p *AuthorResponse) MarshalBinary() ([]byte, error) {
 
 	// Calculate total args length and validate individual arg lengths
 	totalArgsLen := 0
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		if len(arg) > 255 {
 			return nil, fmt.Errorf("%w: argument length exceeds 255 bytes", ErrInvalidPacket)
 		}
@@ -256,7 +256,7 @@ func (p *AuthorResponse) MarshalBinary() ([]byte, error) {
 	offset := 6
 
 	// Write argument lengths
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		buf[offset] = uint8(len(arg))
 		offset++
 	}
@@ -268,7 +268,7 @@ func (p *AuthorResponse) MarshalBinary() ([]byte, error) {
 	offset += dataLen
 
 	// Write arguments
-	for _, arg := range p.Args {
+	for _, arg := range p.RawArgs {
 		copy(buf[offset:], arg)
 		offset += len(arg)
 	}
@@ -335,16 +335,16 @@ func (p *AuthorResponse) UnmarshalBinary(data []byte) error {
 
 	// Read arguments
 	if argCount > 0 {
-		p.Args = make([][]byte, argCount)
+		p.RawArgs = make([][]byte, argCount)
 		for i, argLen := range argLens {
 			if argLen > 0 {
-				p.Args[i] = make([]byte, argLen)
-				copy(p.Args[i], data[offset:offset+argLen])
+				p.RawArgs[i] = make([]byte, argLen)
+				copy(p.RawArgs[i], data[offset:offset+argLen])
 			}
 			offset += argLen
 		}
 	} else {
-		p.Args = nil
+		p.RawArgs = nil
 	}
 
 	return nil

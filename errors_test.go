@@ -27,6 +27,8 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrAuthenFollow,
 			ErrAuthenRestart,
 			ErrSequenceOverflow,
+			ErrMaxPrompts,
+			ErrBadSecret,
 		}
 
 		for _, err := range errs {
@@ -53,6 +55,8 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrAuthenFollow,
 			ErrAuthenRestart,
 			ErrSequenceOverflow,
+			ErrMaxPrompts,
+			ErrBadSecret,
 		}
 
 		for i, err1 := range errs {
@@ -111,6 +115,8 @@ func TestErrorMessages(t *testing.T) {
 		{ErrAuthenFollow, "authentication follow requested"},
 		{ErrAuthenRestart, "authentication restart requested"},
 		{ErrSequenceOverflow, "sequence number overflow"},
+		{ErrMaxPrompts, "maximum prompt count exceeded"},
+		{ErrBadSecret, "bad secret"},
 	}
 
 	for _, tt := range tests {

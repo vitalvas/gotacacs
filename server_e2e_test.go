@@ -58,7 +58,7 @@ func (h *testIntegrationHandler) HandleAuthorRequest(_ context.Context, req *Aut
 		for i, p := range perms {
 			args[i] = []byte(p)
 		}
-		return &AuthorResponse{Status: AuthorStatusPassAdd, Args: args}
+		return &AuthorResponse{Status: AuthorStatusPassAdd, RawArgs: args}
 	}
 	return &AuthorResponse{Status: AuthorStatusFail, ServerMsg: []byte("User not authorized")}
 }
@@ -158,7 +158,7 @@ func TestIntegrationAuthorization(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
 
-		args := resp.GetArgs()
+		args := resp.Args()
 		assert.Contains(t, args, "priv-lvl=15")
 		assert.Contains(t, args, "role=admin")
 	})
@@ -183,7 +183,7 @@ func TestIntegrationAuthorization(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
 
-		args := resp.GetArgs()
+		args := resp.Args()
 		assert.Contains(t, args, "priv-lvl=1")
 	})
 
@@ -502,7 +502,7 @@ func TestIntegrationRFC9887TLS13(t *testing.T) {
 		resp, err := client.Authorize(context.Background(), "admin", []string{"service=shell"})
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
-		assert.Contains(t, resp.GetArgs(), "priv-lvl=15")
+		assert.Contains(t, resp.Args(), "priv-lvl=15")
 
 		// Accounting
 		acctReply, err := client.Accounting(context.Background(), AcctFlagStart, "admin", []string{"task_id=1"})
@@ -683,7 +683,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 		require.True(t, authorResp.IsPass(), "Authorization should pass")
 
 		// Verify privilege level
-		args := authorResp.GetArgs()
+		args := authorResp.Args()
 		assert.Contains(t, args, "priv-lvl=7")
 
 		// 3. Start accounting for the session

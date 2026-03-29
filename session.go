@@ -81,9 +81,8 @@ func NewSessionWithID(id uint32, isClient bool) *Session {
 }
 
 // ID returns the session ID.
+// The session ID is immutable after construction, so no lock is needed.
 func (s *Session) ID() uint32 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.id
 }
 
@@ -109,10 +108,13 @@ func (s *Session) SeqNo() uint8 {
 	return s.seqNo
 }
 
-// NextSeqNo returns the next sequence number and increments the internal counter.
-// For clients: 1, 3, 5, ... (odd numbers)
-// For servers: 2, 4, 6, ... (even numbers)
-// Returns ErrSequenceOverflow if the sequence number would wrap around.
+// NextSeqNo returns the next outgoing sequence number for this session side.
+// Per RFC 8907, sequence numbers increment by 1 for each packet across both
+// sides: client sends 1, server sends 2, client sends 3, etc.
+// This method returns the next number for this side (odd for clients, even
+// for servers) assuming UpdateSeqNo is called between sends with the peer's
+// sequence number.
+// Returns ErrSequenceOverflow if the sequence number would exceed 255.
 func (s *Session) NextSeqNo() (uint8, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,9 +168,8 @@ func (s *Session) ValidateSeqNo(seqNo uint8) bool {
 }
 
 // Created returns the time when the session was created.
+// The creation time is immutable after construction, so no lock is needed.
 func (s *Session) Created() time.Time {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.created
 }
 
@@ -180,9 +181,8 @@ func (s *Session) LastActivity() time.Time {
 }
 
 // IsClient returns true if this is a client session.
+// The client flag is immutable after construction, so no lock is needed.
 func (s *Session) IsClient() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.isClient
 }
 

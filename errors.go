@@ -55,6 +55,10 @@ var (
 	// This happens after 255 packets in a session.
 	ErrSequenceOverflow = errors.New("sequence number overflow")
 
+	// ErrMaxPrompts indicates that an ASCII authentication exchange exceeded
+	// the maximum number of interactive prompt round-trips.
+	ErrMaxPrompts = errors.New("maximum prompt count exceeded")
+
 	// ErrBadSecret indicates the shared secret may be incorrect.
 	// This error is returned when packet parsing fails in a way that
 	// suggests the body was deobfuscated with the wrong secret,

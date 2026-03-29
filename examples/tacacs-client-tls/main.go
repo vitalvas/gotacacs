@@ -45,7 +45,7 @@ func main() {
 		log.Fatalf("Authorization error: %v", err)
 	}
 	fmt.Printf("Status: %s\n", statusString(resp.IsPass()))
-	if args := resp.GetArgs(); len(args) > 0 {
+	if args := resp.Args(); len(args) > 0 {
 		fmt.Println("Args:")
 		for _, arg := range args {
 			fmt.Printf("  %s\n", arg)

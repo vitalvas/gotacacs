@@ -169,6 +169,8 @@ func IsServerPacket(p Packet) bool {
 // become garbage, resulting in unreasonably large expected lengths.
 // If expected length is more than double the actual + 16 bytes overhead,
 // the length fields are likely corrupted from wrong secret deobfuscation.
+// This is a best-effort heuristic; false positives are possible for very
+// small packets where legitimate field values exceed the threshold.
 func isBadSecretError(actualLen, expectedLen int) bool {
 	return expectedLen > actualLen*2+16
 }

@@ -19,7 +19,7 @@ func TestNewAuthorRequest(t *testing.T) {
 		assert.Equal(t, []byte("testuser"), p.User)
 		assert.Nil(t, p.Port)
 		assert.Nil(t, p.RemoteAddr)
-		assert.Nil(t, p.Args)
+		assert.Nil(t, p.RawArgs)
 	})
 }
 
@@ -27,8 +27,8 @@ func TestAuthorRequestAddArg(t *testing.T) {
 	t.Run("add single arg", func(t *testing.T) {
 		p := &AuthorRequest{}
 		p.AddArg("service=shell")
-		assert.Len(t, p.Args, 1)
-		assert.Equal(t, []byte("service=shell"), p.Args[0])
+		assert.Len(t, p.RawArgs, 1)
+		assert.Equal(t, []byte("service=shell"), p.RawArgs[0])
 	})
 
 	t.Run("add multiple args", func(t *testing.T) {
@@ -36,25 +36,25 @@ func TestAuthorRequestAddArg(t *testing.T) {
 		p.AddArg("service=shell")
 		p.AddArg("cmd=show")
 		p.AddArg("cmd-arg=version")
-		assert.Len(t, p.Args, 3)
+		assert.Len(t, p.RawArgs, 3)
 	})
 }
 
-func TestAuthorRequestGetArgs(t *testing.T) {
+func TestAuthorRequestArgs(t *testing.T) {
 	t.Run("get args as strings", func(t *testing.T) {
 		p := &AuthorRequest{
-			Args: [][]byte{
+			RawArgs: [][]byte{
 				[]byte("service=shell"),
 				[]byte("cmd=show"),
 			},
 		}
-		args := p.GetArgs()
+		args := p.Args()
 		assert.Equal(t, []string{"service=shell", "cmd=show"}, args)
 	})
 
 	t.Run("empty args", func(t *testing.T) {
 		p := &AuthorRequest{}
-		args := p.GetArgs()
+		args := p.Args()
 		assert.Empty(t, args)
 	})
 }
@@ -85,7 +85,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 			User:         []byte("admin"),
 			Port:         []byte("tty0"),
 			RemoteAddr:   []byte("192.168.1.1"),
-			Args:         [][]byte{[]byte("service=shell"), []byte("cmd=show")},
+			RawArgs:      [][]byte{[]byte("service=shell"), []byte("cmd=show")},
 		}
 
 		data, err := p.MarshalBinary()
@@ -115,7 +115,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 
 	t.Run("too many args", func(t *testing.T) {
 		p := &AuthorRequest{
-			Args: make([][]byte, 256),
+			RawArgs: make([][]byte, 256),
 		}
 
 		_, err := p.MarshalBinary()
@@ -125,7 +125,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 
 	t.Run("arg too long", func(t *testing.T) {
 		p := &AuthorRequest{
-			Args: [][]byte{bytes.Repeat([]byte("x"), 256)},
+			RawArgs: [][]byte{bytes.Repeat([]byte("x"), 256)},
 		}
 
 		_, err := p.MarshalBinary()
@@ -145,7 +145,7 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 		assert.Equal(t, uint8(0x02), p.AuthenMethod)
 		assert.Equal(t, uint8(0x01), p.PrivLevel)
 		assert.Nil(t, p.User)
-		assert.Nil(t, p.Args)
+		assert.Nil(t, p.RawArgs)
 	})
 
 	t.Run("buffer too short for header", func(t *testing.T) {
@@ -209,7 +209,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
 				User:         []byte("user"),
-				Args:         [][]byte{[]byte("service=shell"), []byte("cmd=show"), []byte("cmd-arg=version")},
+				RawArgs:      [][]byte{[]byte("service=shell"), []byte("cmd=show"), []byte("cmd-arg=version")},
 			},
 		},
 		{
@@ -222,7 +222,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 				User:         []byte("user"),
 				Port:         []byte("console"),
 				RemoteAddr:   []byte("10.0.0.1"),
-				Args:         [][]byte{[]byte("service=ppp"), []byte("protocol=ip")},
+				RawArgs:      [][]byte{[]byte("service=ppp"), []byte("protocol=ip")},
 			},
 		},
 		{
@@ -235,7 +235,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 					Service:      AuthenServiceLogin,
 				}
 				for i := range 255 {
-					p.Args = append(p.Args, []byte{byte(i)})
+					p.RawArgs = append(p.RawArgs, []byte{byte(i)})
 				}
 				return p
 			}(),
@@ -261,9 +261,9 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			assert.Equal(t, tc.packet.User, decoded.User, "user mismatch")
 			assert.Equal(t, tc.packet.Port, decoded.Port, "port mismatch")
 			assert.Equal(t, tc.packet.RemoteAddr, decoded.RemoteAddr, "rem_addr mismatch")
-			assert.Equal(t, len(tc.packet.Args), len(decoded.Args), "args count mismatch")
-			for i := range tc.packet.Args {
-				assert.Equal(t, tc.packet.Args[i], decoded.Args[i], "arg %d mismatch", i)
+			assert.Equal(t, len(tc.packet.RawArgs), len(decoded.RawArgs), "args count mismatch")
+			for i := range tc.packet.RawArgs {
+				assert.Equal(t, tc.packet.RawArgs[i], decoded.RawArgs[i], "arg %d mismatch", i)
 			}
 		})
 	}
@@ -273,7 +273,7 @@ func TestNewAuthorResponse(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
 		p := NewAuthorResponse(AuthorStatusPassAdd)
 		assert.Equal(t, uint8(AuthorStatusPassAdd), p.Status)
-		assert.Nil(t, p.Args)
+		assert.Nil(t, p.RawArgs)
 		assert.Nil(t, p.ServerMsg)
 		assert.Nil(t, p.Data)
 	})
@@ -284,19 +284,19 @@ func TestAuthorResponseAddArg(t *testing.T) {
 		p := &AuthorResponse{}
 		p.AddArg("priv-lvl=15")
 		p.AddArg("timeout=60")
-		assert.Len(t, p.Args, 2)
+		assert.Len(t, p.RawArgs, 2)
 	})
 }
 
-func TestAuthorResponseGetArgs(t *testing.T) {
+func TestAuthorResponseArgs(t *testing.T) {
 	t.Run("get args as strings", func(t *testing.T) {
 		p := &AuthorResponse{
-			Args: [][]byte{
+			RawArgs: [][]byte{
 				[]byte("priv-lvl=15"),
 				[]byte("timeout=60"),
 			},
 		}
-		args := p.GetArgs()
+		args := p.Args()
 		assert.Equal(t, []string{"priv-lvl=15", "timeout=60"}, args)
 	})
 }
@@ -319,7 +319,7 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		p := &AuthorResponse{
 			Status:    AuthorStatusPassRepl,
 			ServerMsg: []byte("Authorized"),
-			Args:      [][]byte{[]byte("priv-lvl=15")},
+			RawArgs:   [][]byte{[]byte("priv-lvl=15")},
 		}
 
 		data, err := p.MarshalBinary()
@@ -342,7 +342,7 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 
 	t.Run("too many args", func(t *testing.T) {
 		p := &AuthorResponse{
-			Args: make([][]byte, 256),
+			RawArgs: make([][]byte, 256),
 		}
 
 		_, err := p.MarshalBinary()
@@ -352,7 +352,7 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 
 	t.Run("arg too long", func(t *testing.T) {
 		p := &AuthorResponse{
-			Args: [][]byte{bytes.Repeat([]byte("x"), 256)},
+			RawArgs: [][]byte{bytes.Repeat([]byte("x"), 256)},
 		}
 
 		_, err := p.MarshalBinary()
@@ -370,7 +370,7 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, uint8(AuthorStatusPassAdd), p.Status)
-		assert.Nil(t, p.Args)
+		assert.Nil(t, p.RawArgs)
 		assert.Nil(t, p.ServerMsg)
 		assert.Nil(t, p.Data)
 	})
@@ -418,8 +418,8 @@ func TestAuthorResponseMarshalUnmarshalRoundtrip(t *testing.T) {
 		{
 			name: "pass_repl with args",
 			packet: &AuthorResponse{
-				Status: AuthorStatusPassRepl,
-				Args:   [][]byte{[]byte("priv-lvl=15"), []byte("timeout=60")},
+				Status:  AuthorStatusPassRepl,
+				RawArgs: [][]byte{[]byte("priv-lvl=15"), []byte("timeout=60")},
 			},
 		},
 		{
@@ -441,7 +441,7 @@ func TestAuthorResponseMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "all fields",
 			packet: &AuthorResponse{
 				Status:    AuthorStatusPassAdd,
-				Args:      [][]byte{[]byte("service=shell"), []byte("priv-lvl=1")},
+				RawArgs:   [][]byte{[]byte("service=shell"), []byte("priv-lvl=1")},
 				ServerMsg: []byte("Welcome"),
 				Data:      []byte("extra"),
 			},
@@ -458,7 +458,7 @@ func TestAuthorResponseMarshalUnmarshalRoundtrip(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.packet.Status, decoded.Status)
-			assert.Equal(t, tc.packet.Args, decoded.Args)
+			assert.Equal(t, tc.packet.RawArgs, decoded.RawArgs)
 			assert.Equal(t, tc.packet.ServerMsg, decoded.ServerMsg)
 			assert.Equal(t, tc.packet.Data, decoded.Data)
 		})
@@ -501,7 +501,7 @@ func TestAuthorRequestEmptyArgs(t *testing.T) {
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
-			Args:         [][]byte{[]byte(""), []byte("test")},
+			RawArgs:      [][]byte{[]byte(""), []byte("test")},
 		}
 
 		data, err := p.MarshalBinary()
@@ -511,17 +511,17 @@ func TestAuthorRequestEmptyArgs(t *testing.T) {
 		err = decoded.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.Args, 2)
-		assert.Nil(t, decoded.Args[0]) // Empty byte slice becomes nil
-		assert.Equal(t, []byte("test"), decoded.Args[1])
+		assert.Len(t, decoded.RawArgs, 2)
+		assert.Nil(t, decoded.RawArgs[0]) // Empty byte slice becomes nil
+		assert.Equal(t, []byte("test"), decoded.RawArgs[1])
 	})
 }
 
 func TestAuthorResponseEmptyArgs(t *testing.T) {
 	t.Run("zero length arg in list", func(t *testing.T) {
 		p := &AuthorResponse{
-			Status: AuthorStatusPassAdd,
-			Args:   [][]byte{[]byte(""), []byte("test")},
+			Status:  AuthorStatusPassAdd,
+			RawArgs: [][]byte{[]byte(""), []byte("test")},
 		}
 
 		data, err := p.MarshalBinary()
@@ -531,9 +531,9 @@ func TestAuthorResponseEmptyArgs(t *testing.T) {
 		err = decoded.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		assert.Len(t, decoded.Args, 2)
-		assert.Nil(t, decoded.Args[0]) // Empty byte slice becomes nil
-		assert.Equal(t, []byte("test"), decoded.Args[1])
+		assert.Len(t, decoded.RawArgs, 2)
+		assert.Nil(t, decoded.RawArgs[0]) // Empty byte slice becomes nil
+		assert.Equal(t, []byte("test"), decoded.RawArgs[1])
 	})
 }
 
@@ -575,6 +575,42 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 			0xFF, 0xFF, // data_len = 65535
 		}
 		// minLen = 6 + 255 = 261, but we only have 6
+
+		p := &AuthorResponse{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AuthorRequest bad secret on second length check", func(t *testing.T) {
+		// Passes first check (minLen = 8 + argCount), but arg length bytes
+		// encode huge totalArgsLen triggering isBadSecretError on second check.
+		data := []byte{
+			0x01, 0x01, 0x01, 0x01, // authen_method, priv, authen_type, service
+			0x00, 0x00, 0x00, 0x02, // user=0, port=0, rem_addr=0, arg_count=2
+			0xFF, 0xFF, // arg1_len=255, arg2_len=255 => totalArgsLen=510
+		}
+		// First check: minLen = 8+2+0+0+0 = 10, len(data)=10 => passes
+		// Second check: expectedLen = 10+0+0+0+510 = 520, isBadSecretError(10,520) => true
+
+		p := &AuthorRequest{}
+		err := p.UnmarshalBinary(data)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+	})
+
+	t.Run("AuthorResponse bad secret on second length check", func(t *testing.T) {
+		// Passes first check (minLen = 6 + argCount=1 = 7), but arg length byte
+		// encodes huge totalArgsLen triggering isBadSecretError on second check.
+		data := []byte{
+			0x01,       // status
+			0x01,       // arg_count=1
+			0x00, 0x00, // server_msg_len=0
+			0x00, 0x00, // data_len=0
+			0xFF, // arg1_len=255
+		}
+		// First check: minLen = 6+1 = 7, len(data)=7 => passes
+		// Second check: expectedLen = 7+0+0+255 = 262, isBadSecretError(7,262) => true
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)

@@ -361,8 +361,8 @@ func TestClientAuthorize(t *testing.T) {
 			io.ReadFull(conn, body)
 
 			reply := &AuthorResponse{
-				Status: AuthorStatusPassAdd,
-				Args:   [][]byte{[]byte("priv-lvl=15")},
+				Status:  AuthorStatusPassAdd,
+				RawArgs: [][]byte{[]byte("priv-lvl=15")},
 			}
 			replyBody, _ := reply.MarshalBinary()
 
@@ -388,7 +388,7 @@ func TestClientAuthorize(t *testing.T) {
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell", "cmd=show"})
 		require.NoError(t, err)
 		assert.True(t, resp.IsPass())
-		assert.Equal(t, []string{"priv-lvl=15"}, resp.GetArgs())
+		assert.Equal(t, []string{"priv-lvl=15"}, resp.Args())
 	})
 }
 
@@ -1223,5 +1223,1002 @@ func TestClientErrorPaths(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, reply.IsPass())
+	})
+}
+
+func TestWithSecretBytesCopy(t *testing.T) {
+	t.Run("mutation after creation does not affect client", func(t *testing.T) {
+		secret := []byte("original")
+		client := NewClient(WithSecretBytes(secret))
+
+		// Mutate the original slice
+		secret[0] = 'X'
+
+		assert.Equal(t, []byte("original"), client.secret)
+	})
+}
+
+func TestASCIIAuthMaxPrompts(t *testing.T) {
+	t.Run("exceeds max prompts", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			// Read START packet
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			seqNo := uint8(2)
+			for {
+				// Always reply with GETPASS to keep prompting
+				reply := &AuthenReply{
+					Status:    AuthenStatusGetPass,
+					ServerMsg: []byte("Password: "),
+				}
+				replyBody, _ := reply.MarshalBinary()
+
+				respHeader := &Header{
+					Version:   0xc0,
+					Type:      PacketTypeAuthen,
+					SeqNo:     seqNo,
+					SessionID: header.SessionID,
+					Length:    uint32(len(replyBody)),
+				}
+
+				obfBody := Obfuscate(respHeader, secret, replyBody)
+				respHeaderData, _ := respHeader.MarshalBinary()
+				if _, err := conn.Write(respHeaderData); err != nil {
+					return
+				}
+				if _, err := conn.Write(obfBody); err != nil {
+					return
+				}
+				seqNo += 2
+
+				// Read CONTINUE
+				contHeaderBuf := make([]byte, HeaderLength)
+				if _, err := io.ReadFull(conn, contHeaderBuf); err != nil {
+					return
+				}
+				contHeader := &Header{}
+				contHeader.UnmarshalBinary(contHeaderBuf)
+				contBody := make([]byte, contHeader.Length)
+				if _, err := io.ReadFull(conn, contBody); err != nil {
+					return
+				}
+			}
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "response", nil
+		})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrMaxPrompts)
+	})
+}
+
+func TestClientIsTLSConnection(t *testing.T) {
+	t.Run("nil connection returns false", func(t *testing.T) {
+		client := NewClient(WithAddress("localhost:49"))
+		assert.False(t, client.IsTLSConnection())
+	})
+}
+
+func TestClientSendPacketErrors(t *testing.T) {
+	t.Run("write error via authenticate on pre-closed connection", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			conn.Close()
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
+		err := client.Connect(context.Background())
+		require.NoError(t, err)
+
+		// Close the client's own connection to force write errors
+		client.mu.Lock()
+		client.conn.Close()
+		// Keep conn non-nil so connectLocked thinks we are connected
+		// but the underlying fd is closed
+		client.mu.Unlock()
+
+		_, err = client.Authenticate(context.Background(), "user", "pass")
+		assert.Error(t, err)
+	})
+}
+
+func TestClientRecvPacketErrors(t *testing.T) {
+	t.Run("header read error non-EOF", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			// Read the client request
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send partial header (less than HeaderLength bytes) then close
+			conn.Write([]byte{0xc0, 0x01})
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read header")
+	})
+
+	t.Run("body read error", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send valid header with body length > 0, but no body data
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    100, // Claim 100 bytes body
+			}
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			// Write only a few bytes then close
+			conn.Write([]byte{0x01, 0x02})
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret(string(secret)), WithTimeout(time.Second))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read body")
+	})
+}
+
+func TestAuthenticateWithContextErrors(t *testing.T) {
+	t.Run("nil authCtx", func(t *testing.T) {
+		client := NewClient(WithAddress("localhost:49"))
+		_, err := client.AuthenticateWithContext(context.Background(), nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+	})
+
+	t.Run("session id mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			sessionMod: 1, // Wrong session ID
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+	})
+
+	t.Run("sequence number mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      5, // Wrong seq
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSequence)
+	})
+
+	t.Run("response type mismatch", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct, // Wrong type
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidType)
+	})
+
+	t.Run("unmarshal reply error with truncated body", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send body that is too short to unmarshal as AuthenReply (needs >= 6 bytes)
+			invalidBody := []byte{0x01, 0x02}
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(invalidBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, invalidBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+	})
+
+	t.Run("authen status error", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("internal error")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.NoError(t, err)
+		assert.True(t, result.IsError())
+	})
+
+	t.Run("server rejects single connect for follow", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusFollow, ServerMsg: []byte("other-server:49")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithSingleConnect(true))
+		result, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenFollow)
+		assert.NotNil(t, result)
+		// Connection should be closed since server did not echo single-connect flag
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("server rejects single connect for restart", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusRestart}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithSingleConnect(true))
+		result, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrAuthenRestart)
+		assert.NotNil(t, result)
+		assert.False(t, client.IsConnected())
+	})
+}
+
+func TestAuthenticateASCIIErrors(t *testing.T) {
+	t.Run("session id mismatch in ASCII loop", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusGetPass, ServerMsg: []byte("Password: ")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			sessionMod: 1, // Wrong session ID
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+	})
+
+	t.Run("sequence number mismatch in ASCII loop", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusGetPass, ServerMsg: []byte("Password: ")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      5, // Wrong sequence
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSequence)
+	})
+
+	t.Run("unmarshal error in ASCII loop", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send body too short for AuthenReply
+			invalidBody := []byte{0x01}
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(invalidBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, invalidBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+	})
+
+	t.Run("response type mismatch in ASCII loop", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct, // Wrong type
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidType)
+	})
+
+	t.Run("ASCII pass with single connect rejected", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithSingleConnect(true))
+		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.NoError(t, err)
+		assert.True(t, result.IsPass())
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("ASCII fail with single connect rejected", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusFail}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithSingleConnect(true))
+		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.NoError(t, err)
+		assert.True(t, result.IsFail())
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("ASCII error status", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("server error")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			return "pass", nil
+		})
+		require.NoError(t, err)
+		assert.True(t, result.IsError())
+	})
+
+	t.Run("send continue error on closed connection", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send GETPASS reply
+			reply := &AuthenReply{
+				Status:    AuthenStatusGetPass,
+				ServerMsg: []byte("Password: "),
+			}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+
+			// Close connection before reading CONTINUE
+			// This will cause sendPacket to fail
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
+		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
+			// Delay slightly so server closes first
+			time.Sleep(50 * time.Millisecond)
+			return "mypassword", nil
+		})
+		require.Error(t, err)
+	})
+}
+
+func TestAuthorizeErrors(t *testing.T) {
+	t.Run("unmarshal response error", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send body too short for AuthorResponse (needs >= 6 bytes)
+			invalidBody := []byte{0x01}
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthor,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(invalidBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, invalidBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal RESPONSE")
+	})
+
+	t.Run("authorize send error", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			conn.Close()
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
+		err := client.Connect(context.Background())
+		require.NoError(t, err)
+
+		// Wait for server to close
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = client.Authorize(context.Background(), "user", []string{"service=shell"})
+		assert.Error(t, err)
+	})
+
+	t.Run("authorize fail status sets error state", func(t *testing.T) {
+		secret := []byte("testsecret")
+		resp := &AuthorResponse{Status: AuthorStatusFail}
+		respBody, _ := resp.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthor,
+			seqNo:      2,
+			body:       respBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+		require.NoError(t, err)
+		assert.False(t, result.IsPass())
+	})
+}
+
+func TestAccountingErrors(t *testing.T) {
+	t.Run("unmarshal reply error", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send body too short for AcctReply (needs >= 5 bytes)
+			invalidBody := []byte{0x01}
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAcct,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(invalidBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, invalidBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+	})
+
+	t.Run("accounting send error", func(t *testing.T) {
+		handler := func(conn net.Conn) {
+			conn.Close()
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
+		err := client.Connect(context.Background())
+		require.NoError(t, err)
+
+		// Wait for server to close
+		time.Sleep(50 * time.Millisecond)
+
+		_, err = client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		assert.Error(t, err)
+	})
+
+	t.Run("accounting error status sets error state", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AcctReply{Status: AcctStatusError}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		require.NoError(t, err)
+		assert.False(t, result.IsSuccess())
+	})
+}
+
+func TestClientSendPacketWriteDeadlineError(t *testing.T) {
+	t.Run("write deadline error on closed connection", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+		serverConn.Close()
+		clientConn.Close()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(time.Second),
+		)
+		client.conn = clientConn
+
+		header := NewHeader(PacketTypeAuthen, 12345)
+		header.SeqNo = 1
+		err := client.sendPacket(context.Background(), header, []byte{0x01})
+
+		require.Error(t, err)
+	})
+
+	t.Run("writeAll header error without timeout", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+		serverConn.Close()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(0), // No timeout, so SetWriteDeadline is skipped
+		)
+		client.conn = clientConn
+
+		header := NewHeader(PacketTypeAuthen, 12345)
+		header.SeqNo = 1
+		err := client.sendPacket(context.Background(), header, []byte{0x01})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to write header")
+		clientConn.Close()
+	})
+
+	t.Run("writeAll body error without timeout", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(0),
+		)
+		client.conn = clientConn
+
+		// Read the header on the server side, then close to cause body write error
+		go func() {
+			buf := make([]byte, HeaderLength)
+			io.ReadFull(serverConn, buf)
+			serverConn.Close()
+		}()
+
+		header := NewHeader(PacketTypeAuthen, 12345)
+		header.SeqNo = 1
+		err := client.sendPacket(context.Background(), header, []byte{0x01, 0x02, 0x03})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to write body")
+		clientConn.Close()
+	})
+}
+
+func TestClientRecvPacketReadDeadlineError(t *testing.T) {
+	t.Run("read deadline error on closed connection", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+		serverConn.Close()
+		clientConn.Close()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(time.Second),
+		)
+		client.conn = clientConn
+
+		_, _, err := client.recvPacket(context.Background())
+		require.Error(t, err)
+	})
+
+	t.Run("non-EOF header read error", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(0),
+		)
+		client.conn = clientConn
+
+		// Write partial header then close to cause non-EOF error
+		go func() {
+			serverConn.Write([]byte{0xc0, 0x01, 0x02})
+			serverConn.Close()
+		}()
+
+		_, _, err := client.recvPacket(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read header")
+		clientConn.Close()
+	})
+
+	t.Run("header unmarshal error with invalid version", func(t *testing.T) {
+		serverConn, clientConn := net.Pipe()
+
+		client := NewClient(
+			WithAddress("localhost:49"),
+			WithSecret("testsecret"),
+			WithTimeout(0),
+		)
+		client.conn = clientConn
+
+		// Send a complete header with invalid version
+		go func() {
+			header := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: 12345,
+				Length:    0,
+			}
+			data, _ := header.MarshalBinary()
+			// Corrupt version byte
+			data[0] = 0x00
+			serverConn.Write(data)
+			serverConn.Close()
+		}()
+
+		_, _, err := client.recvPacket(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid header")
+		clientConn.Close()
+	})
+}
+
+func TestClientRecvPacketTLSUnencryptedFlagCheck(t *testing.T) {
+	t.Run("TLS connection rejects packet without unencrypted flag", func(t *testing.T) {
+		cert, err := generateTestCertificate()
+		require.NoError(t, err)
+
+		serverConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+
+		ln, err := tls.Listen("tcp", "127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+		defer ln.Close()
+
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			// Read client request
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Send response WITHOUT unencrypted flag (violates RFC 9887)
+			reply := &AuthenReply{Status: AuthenStatusPass}
+			replyBody, _ := reply.MarshalBinary()
+
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				Flags:     0, // Missing FlagUnencrypted - RFC 9887 violation
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(replyBody) // Unobfuscated since TLS
+		}()
+
+		clientConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS13,
+		}
+
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
+			WithTLSConfig(clientConfig),
+		)
+
+		_, err = client.Authenticate(context.Background(), "testuser", "password")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.Contains(t, err.Error(), "RFC 9887")
+	})
+}
+
+func TestClientContextCancellation(t *testing.T) {
+	t.Run("cancelled context aborts authentication", func(t *testing.T) {
+		secret := []byte("testsecret")
+
+		// Server that delays response
+		handler := func(conn net.Conn) {
+			defer conn.Close()
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+
+			// Wait longer than context deadline before responding
+			time.Sleep(2 * time.Second)
+
+			reply := &AuthenReply{Status: AuthenStatusPass}
+			replyBody, _ := reply.MarshalBinary()
+			respHeader := &Header{
+				Version:   0xc0,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+			obfBody := Obfuscate(respHeader, secret, replyBody)
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(obfBody)
+		}
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(10*time.Second))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		_, err := client.Authenticate(ctx, "user", "pass")
+		require.Error(t, err)
 	})
 }

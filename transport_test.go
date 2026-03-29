@@ -193,7 +193,7 @@ func TestTCPListenerAcceptClose(t *testing.T) {
 }
 
 func TestConnInterface(t *testing.T) {
-	t.Run("tcpConn implements Conn", func(t *testing.T) {
+	t.Run("net.Conn works as connection type", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		defer ln.Close()
@@ -206,12 +206,9 @@ func TestConnInterface(t *testing.T) {
 			}
 		}()
 
-		netConn, err := net.Dial("tcp", ln.Addr().String())
+		conn, err := net.Dial("tcp", ln.Addr().String())
 		require.NoError(t, err)
 
-		conn := &tcpConn{Conn: netConn}
-
-		// Test all net.Conn methods through our wrapper
 		assert.NotNil(t, conn.LocalAddr())
 		assert.NotNil(t, conn.RemoteAddr())
 
@@ -245,7 +242,7 @@ func TestDialerInterface(t *testing.T) {
 }
 
 func TestListenerInterface(t *testing.T) {
-	t.Run("tcpListener implements Listener", func(t *testing.T) {
+	t.Run("net.Listener implements Listener", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
 		require.NoError(t, err)
 		defer ln.Close()
@@ -328,7 +325,7 @@ func TestIsTLSConn(t *testing.T) {
 		require.NoError(t, err)
 		defer ln.Close()
 
-		serverDone := make(chan Conn)
+		serverDone := make(chan net.Conn)
 		go func() {
 			conn, err := ln.Accept()
 			if err != nil {
@@ -382,7 +379,7 @@ func TestIsTLSConn(t *testing.T) {
 }
 
 func TestTLSConnInterface(t *testing.T) {
-	t.Run("tlsConn implements TLSConn interface", func(t *testing.T) {
+	t.Run("tls.Conn implements TLSConn interface", func(t *testing.T) {
 		cert, err := generateTestCertificate()
 		require.NoError(t, err)
 

@@ -9,16 +9,10 @@ import (
 	"time"
 )
 
-// Conn represents a network connection for TACACS+ communication.
-// It extends net.Conn with additional context awareness.
-type Conn interface {
-	net.Conn
-}
-
 // TLSConn represents a TLS-secured connection.
-// Use IsTLSConn to check if a Conn is TLS-secured.
+// Use IsTLSConn to check if a connection is TLS-secured.
 type TLSConn interface {
-	Conn
+	net.Conn
 	// ConnectionState returns the TLS connection state.
 	ConnectionState() tls.ConnectionState
 }
@@ -26,7 +20,7 @@ type TLSConn interface {
 // Listener represents a network listener for accepting TACACS+ connections.
 type Listener interface {
 	// Accept waits for and returns the next connection to the listener.
-	Accept() (Conn, error)
+	Accept() (net.Conn, error)
 
 	// Close closes the listener.
 	Close() error
@@ -38,87 +32,13 @@ type Listener interface {
 // Dialer represents a dialer for establishing TACACS+ connections.
 type Dialer interface {
 	// Dial connects to the address on the named network.
-	Dial(ctx context.Context, network, address string) (Conn, error)
-}
-
-// tcpConn wraps a net.Conn to implement Conn interface.
-type tcpConn struct {
-	net.Conn
-}
-
-// tlsConn wraps a *tls.Conn to implement TLSConn interface.
-type tlsConn struct {
-	conn *tls.Conn
-}
-
-// Read reads data from the connection.
-func (c *tlsConn) Read(b []byte) (int, error) {
-	return c.conn.Read(b)
-}
-
-// Write writes data to the connection.
-func (c *tlsConn) Write(b []byte) (int, error) {
-	return c.conn.Write(b)
-}
-
-// Close closes the connection.
-func (c *tlsConn) Close() error {
-	return c.conn.Close()
-}
-
-// LocalAddr returns the local network address.
-func (c *tlsConn) LocalAddr() net.Addr {
-	return c.conn.LocalAddr()
-}
-
-// RemoteAddr returns the remote network address.
-func (c *tlsConn) RemoteAddr() net.Addr {
-	return c.conn.RemoteAddr()
-}
-
-// SetDeadline sets the read and write deadlines.
-func (c *tlsConn) SetDeadline(t time.Time) error {
-	return c.conn.SetDeadline(t)
-}
-
-// SetReadDeadline sets the read deadline.
-func (c *tlsConn) SetReadDeadline(t time.Time) error {
-	return c.conn.SetReadDeadline(t)
-}
-
-// SetWriteDeadline sets the write deadline.
-func (c *tlsConn) SetWriteDeadline(t time.Time) error {
-	return c.conn.SetWriteDeadline(t)
-}
-
-// ConnectionState returns the TLS connection state.
-func (c *tlsConn) ConnectionState() tls.ConnectionState {
-	return c.conn.ConnectionState()
-}
-
-// HandshakeContext performs the TLS handshake, if not already completed.
-func (c *tlsConn) HandshakeContext(ctx context.Context) error {
-	return c.conn.HandshakeContext(ctx)
+	Dial(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // IsTLSConn returns true if the connection is TLS-secured.
-func IsTLSConn(conn Conn) bool {
+func IsTLSConn(conn net.Conn) bool {
 	_, ok := conn.(TLSConn)
 	return ok
-}
-
-// tcpListener wraps a net.Listener to implement Listener interface.
-type tcpListener struct {
-	net.Listener
-}
-
-// Accept accepts a connection from the listener.
-func (l *tcpListener) Accept() (Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	return &tcpConn{Conn: conn}, nil
 }
 
 // tlsListener wraps a net.Listener for TLS connections.
@@ -127,7 +47,7 @@ type tlsListener struct {
 }
 
 // Accept accepts a TLS connection from the listener.
-func (l *tlsListener) Accept() (Conn, error) {
+func (l *tlsListener) Accept() (net.Conn, error) {
 	conn, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
@@ -137,7 +57,7 @@ func (l *tlsListener) Accept() (Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("expected TLS connection")
 	}
-	return &tlsConn{conn: tc}, nil
+	return tc, nil
 }
 
 // TCPDialer implements Dialer for TCP connections.
@@ -152,7 +72,7 @@ type TCPDialer struct {
 }
 
 // Dial connects to the address using TCP.
-func (d *TCPDialer) Dial(ctx context.Context, network, address string) (Conn, error) {
+func (d *TCPDialer) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	dialer := &net.Dialer{
 		Timeout:   d.Timeout,
 		LocalAddr: d.LocalAddr,
@@ -162,7 +82,7 @@ func (d *TCPDialer) Dial(ctx context.Context, network, address string) (Conn, er
 	if err != nil {
 		return nil, err
 	}
-	return &tcpConn{Conn: conn}, nil
+	return conn, nil
 }
 
 // TLSDialer implements Dialer for TLS connections.
@@ -176,7 +96,7 @@ type TLSDialer struct {
 }
 
 // Dial connects to the address using TLS.
-func (d *TLSDialer) Dial(ctx context.Context, network, address string) (Conn, error) {
+func (d *TLSDialer) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{
 			Timeout: d.Timeout,
@@ -193,7 +113,7 @@ func (d *TLSDialer) Dial(ctx context.Context, network, address string) (Conn, er
 		conn.Close()
 		return nil, fmt.Errorf("expected TLS connection")
 	}
-	return &tlsConn{conn: tc}, nil
+	return tc, nil
 }
 
 // ListenTCP creates a TCP listener on the specified address.
@@ -202,7 +122,7 @@ func ListenTCP(address string) (Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", address, err)
 	}
-	return &tcpListener{Listener: ln}, nil
+	return ln, nil
 }
 
 // ListenTLS creates a TLS listener on the specified address.

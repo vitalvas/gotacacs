@@ -280,12 +280,15 @@ func BenchmarkNewSession(b *testing.B) {
 }
 
 func BenchmarkSessionNextSeqNo(b *testing.B) {
-	session, _ := NewSession(true)
-
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = session.NextSeqNo()
+		session := NewSessionWithID(uint32(i), true)
+		for {
+			if _, err := session.NextSeqNo(); err != nil {
+				break
+			}
+		}
 	}
 }
 

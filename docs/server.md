@@ -111,7 +111,7 @@ func (h *myHandler) HandleAuthenContinue(_ context.Context, req *gotacacs.Authen
 
 func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
     user := string(req.Request.User)
-    args := req.Request.GetArgs()
+    args := req.Request.Args()
 
     log.Printf("Authorization: user=%s args=%v from=%s userData=%v",
         user, args, req.RemoteAddr, req.UserData)
@@ -132,13 +132,13 @@ func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorR
 
     return &gotacacs.AuthorResponse{
         Status: gotacacs.AuthorStatusPassAdd,
-        Args:   respArgs,
+        RawArgs: respArgs,
     }
 }
 
 func (h *myHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
     user := string(req.Request.User)
-    args := req.Request.GetArgs()
+    args := req.Request.Args()
 
     log.Printf("Accounting: user=%s flags=%d args=%v from=%s userData=%v",
         user, req.Request.Flags, args, req.RemoteAddr, req.UserData)
@@ -275,7 +275,7 @@ Parse and process authorization arguments:
 
 ```go
 func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
-    args := req.Request.GetArgs()
+    args := req.Request.Args()
 
     var service, cmd string
     for _, arg := range args {
@@ -294,7 +294,7 @@ func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorR
     if service == "shell" && h.isCommandAllowed(cmd) {
         return &gotacacs.AuthorResponse{
             Status: gotacacs.AuthorStatusPassAdd,
-            Args:   [][]byte{[]byte("priv-lvl=15")},
+            RawArgs: [][]byte{[]byte("priv-lvl=15")},
         }
     }
 

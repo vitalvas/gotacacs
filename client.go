@@ -10,13 +10,19 @@ import (
 	"time"
 )
 
+// maxASCIIPrompts limits the number of interactive prompt round-trips in ASCII
+// authentication to prevent a malicious server from keeping the client in an
+// infinite loop. The TACACS+ protocol limits sessions to 255 sequence numbers,
+// but a practical authentication exchange should never exceed this many prompts.
+const maxASCIIPrompts = 20
+
 // Client represents a TACACS+ client for communicating with a TACACS+ server.
 type Client struct {
 	mu      sync.Mutex
 	address string
 	secret  []byte
 	dialer  Dialer
-	conn    Conn
+	conn    net.Conn
 	session *Session
 
 	timeout       time.Duration
@@ -50,9 +56,12 @@ func WithSecret(secret string) ClientOption {
 }
 
 // WithSecretBytes sets the shared secret as bytes for packet obfuscation.
+// The input slice is copied to prevent mutations from affecting the client.
 func WithSecretBytes(secret []byte) ClientOption {
+	cp := make([]byte, len(secret))
+	copy(cp, secret)
 	return func(c *Client) {
-		c.secret = secret
+		c.secret = cp
 	}
 }
 
@@ -61,6 +70,9 @@ func WithSecretBytes(secret []byte) ClientOption {
 // packet obfuscation is disabled since TLS provides encryption.
 // This function enforces TLS 1.3 as required by RFC 9887.
 // If config is nil, a default TLS 1.3 configuration is used.
+// Note: if using WithTimeout, specify it before WithTLSConfig to ensure the
+// timeout is applied to the TLS dialer. The constructor corrects this for
+// built-in dialers, but custom dialers set via WithDialer are not updated.
 func WithTLSConfig(config *tls.Config) ClientOption {
 	return func(c *Client) {
 		var cfg *tls.Config
@@ -180,10 +192,29 @@ func (c *Client) IsConnected() bool {
 	return c.conn != nil
 }
 
+// effectiveDeadline returns the earliest deadline from the context and timeout.
+func (c *Client) effectiveDeadline(ctx context.Context) time.Time {
+	timeoutDeadline := time.Time{}
+	if c.timeout > 0 {
+		timeoutDeadline = time.Now().Add(c.timeout)
+	}
+
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		if timeoutDeadline.IsZero() || ctxDeadline.Before(timeoutDeadline) {
+			return ctxDeadline
+		}
+	}
+
+	return timeoutDeadline
+}
+
 // sendPacket sends a packet to the server with proper framing and obfuscation.
-func (c *Client) sendPacket(header *Header, body []byte) error {
+func (c *Client) sendPacket(ctx context.Context, header *Header, body []byte) error {
 	// Set body length in header
 	header.Length = uint32(len(body))
+
+	// Reset flags to avoid stale state from previous iterations
+	header.Flags = 0
 
 	// Set single-connect flag if enabled
 	if c.singleConnect {
@@ -214,9 +245,9 @@ func (c *Client) sendPacket(header *Header, body []byte) error {
 		return fmt.Errorf("failed to marshal header: %w", err)
 	}
 
-	// Set deadline for write
-	if c.timeout > 0 {
-		if err := c.conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
+	// Set deadline for write (respects both timeout and context deadline)
+	if deadline := c.effectiveDeadline(ctx); !deadline.IsZero() {
+		if err := c.conn.SetWriteDeadline(deadline); err != nil {
 			return fmt.Errorf("failed to set write deadline: %w", err)
 		}
 	}
@@ -236,10 +267,10 @@ func (c *Client) sendPacket(header *Header, body []byte) error {
 }
 
 // recvPacket receives a packet from the server with deobfuscation.
-func (c *Client) recvPacket() (*Header, []byte, error) {
-	// Set deadline for read
-	if c.timeout > 0 {
-		if err := c.conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
+	// Set deadline for read (respects both timeout and context deadline)
+	if deadline := c.effectiveDeadline(ctx); !deadline.IsZero() {
+		if err := c.conn.SetReadDeadline(deadline); err != nil {
 			return nil, nil, fmt.Errorf("failed to set read deadline: %w", err)
 		}
 	}
@@ -369,13 +400,13 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	header.SeqNo = seqNo
 
 	// Send START packet
-	if err := c.sendPacket(header, startBody); err != nil {
+	if err := c.sendPacket(ctx, header, startBody); err != nil {
 		c.closeConnection()
 		return nil, err
 	}
 
 	// Receive reply
-	respHeader, respBody, err := c.recvPacket()
+	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
 		return nil, err
@@ -403,6 +434,9 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 		return nil, fmt.Errorf("failed to unmarshal REPLY: %w", err)
 	}
 
+	// RFC 8907: Check if server agreed to single-connect mode
+	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+
 	// Update session state based on reply
 	switch reply.Status {
 	case AuthenStatusPass:
@@ -411,20 +445,20 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 		session.SetState(SessionStateError)
 	case AuthenStatusFollow:
 		session.SetState(SessionStateComplete)
-		if !c.singleConnect {
+		if !singleConnectOK {
 			c.closeConnection()
 		}
 		return reply, fmt.Errorf("%w: %s", ErrAuthenFollow, string(reply.ServerMsg))
 	case AuthenStatusRestart:
 		session.SetState(SessionStateComplete)
-		if !c.singleConnect {
+		if !singleConnectOK {
 			c.closeConnection()
 		}
 		return reply, ErrAuthenRestart
 	}
 
-	// Close connection if not using single-connect
-	if !c.singleConnect {
+	// Close connection if not using single-connect or server rejected it
+	if !singleConnectOK {
 		c.closeConnection()
 	}
 
@@ -471,15 +505,21 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 	header.SeqNo = seqNo
 
 	// Send START packet
-	if err := c.sendPacket(header, startBody); err != nil {
+	if err := c.sendPacket(ctx, header, startBody); err != nil {
 		c.closeConnection()
 		return nil, err
 	}
 
-	// Authentication loop
-	for {
+	// Authentication loop with iteration limit to prevent malicious servers
+	// from keeping the client in an infinite prompt loop.
+	for iteration := 0; ; iteration++ {
+		if iteration >= maxASCIIPrompts {
+			c.closeConnection()
+			return nil, fmt.Errorf("%w: %d", ErrMaxPrompts, maxASCIIPrompts)
+		}
+
 		// Receive reply
-		respHeader, respBody, err := c.recvPacket()
+		respHeader, respBody, err := c.recvPacket(ctx)
 		if err != nil {
 			c.closeConnection()
 			return nil, err
@@ -508,10 +548,13 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 		session.UpdateSeqNo(respHeader.SeqNo)
 
+		// RFC 8907: Check if server agreed to single-connect mode
+		singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+
 		// Check if authentication is complete
 		if reply.IsPass() {
 			session.SetState(SessionStateComplete)
-			if !c.singleConnect {
+			if !singleConnectOK {
 				c.closeConnection()
 			}
 			return reply, nil
@@ -519,7 +562,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 		if reply.IsFail() || reply.IsError() {
 			session.SetState(SessionStateError)
-			if !c.singleConnect {
+			if !singleConnectOK {
 				c.closeConnection()
 			}
 			return reply, nil
@@ -528,7 +571,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 		// Handle FOLLOW/RESTART statuses
 		if reply.Status == AuthenStatusFollow {
 			session.SetState(SessionStateComplete)
-			if !c.singleConnect {
+			if !singleConnectOK {
 				c.closeConnection()
 			}
 			return reply, fmt.Errorf("%w: %s", ErrAuthenFollow, string(reply.ServerMsg))
@@ -536,7 +579,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 		if reply.Status == AuthenStatusRestart {
 			session.SetState(SessionStateComplete)
-			if !c.singleConnect {
+			if !singleConnectOK {
 				c.closeConnection()
 			}
 			return reply, ErrAuthenRestart
@@ -553,7 +596,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 				abortSeqNo, seqErr := session.NextSeqNo()
 				if seqErr == nil {
 					header.SeqNo = abortSeqNo
-					c.sendPacket(header, contBody)
+					c.sendPacket(ctx, header, contBody)
 				}
 				c.closeConnection()
 				return nil, err
@@ -572,12 +615,13 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 				return nil, err
 			}
 			header.SeqNo = contSeqNo
-			if err := c.sendPacket(header, contBody); err != nil {
+			if err := c.sendPacket(ctx, header, contBody); err != nil {
 				c.closeConnection()
 				return nil, err
 			}
 		} else {
 			// Unexpected status
+			c.closeConnection()
 			return nil, fmt.Errorf("unexpected authentication status: %d", reply.Status)
 		}
 	}
@@ -601,7 +645,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 
 	// Create REQUEST packet
 	req := &AuthorRequest{
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethodTACACSPlus,
 		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -626,13 +670,13 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	header.SeqNo = seqNo
 
 	// Send REQUEST
-	if err := c.sendPacket(header, reqBody); err != nil {
+	if err := c.sendPacket(ctx, header, reqBody); err != nil {
 		c.closeConnection()
 		return nil, err
 	}
 
 	// Receive response
-	respHeader, respBody, err := c.recvPacket()
+	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
 		return nil, err
@@ -667,8 +711,9 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 		session.SetState(SessionStateError)
 	}
 
-	// Close connection if not using single-connect
-	if !c.singleConnect {
+	// RFC 8907: Close connection if server didn't agree to single-connect
+	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+	if !singleConnectOK {
 		c.closeConnection()
 	}
 
@@ -694,7 +739,7 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	// Create REQUEST packet
 	req := &AcctRequest{
 		Flags:        flags,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethodTACACSPlus,
 		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -719,13 +764,13 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	header.SeqNo = seqNo
 
 	// Send REQUEST
-	if err := c.sendPacket(header, reqBody); err != nil {
+	if err := c.sendPacket(ctx, header, reqBody); err != nil {
 		c.closeConnection()
 		return nil, err
 	}
 
 	// Receive reply
-	respHeader, respBody, err := c.recvPacket()
+	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
 		return nil, err
@@ -760,12 +805,19 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 		session.SetState(SessionStateError)
 	}
 
-	// Close connection if not using single-connect
-	if !c.singleConnect {
+	// RFC 8907: Close connection if server didn't agree to single-connect
+	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+	if !singleConnectOK {
 		c.closeConnection()
 	}
 
 	return reply, nil
+}
+
+// serverAcceptedSingleConnect checks if the server echoed the single-connect flag.
+// Per RFC 8907 Section 4.3, both sides must agree on single-connect mode.
+func serverAcceptedSingleConnect(respHeader *Header) bool {
+	return respHeader.Flags&FlagSingleConnect != 0
 }
 
 // closeConnection closes the connection without locking.

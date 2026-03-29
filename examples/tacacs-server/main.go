@@ -97,7 +97,7 @@ func (h *exampleHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.Aut
 func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
 	user := string(req.Request.User)
 
-	log.Printf("Authorization: user=%s args=%v from=%s userData=%v", user, req.Request.GetArgs(), req.RemoteAddr, req.UserData)
+	log.Printf("Authorization: user=%s args=%v from=%s userData=%v", user, req.Request.Args(), req.RemoteAddr, req.UserData)
 
 	if _, ok := h.users[user]; !ok {
 		return &gotacacs.AuthorResponse{
@@ -107,15 +107,15 @@ func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.Au
 	}
 
 	return &gotacacs.AuthorResponse{
-		Status: gotacacs.AuthorStatusPassAdd,
-		Args:   [][]byte{[]byte("priv-lvl=15")},
+		Status:  gotacacs.AuthorStatusPassAdd,
+		RawArgs: [][]byte{[]byte("priv-lvl=15")},
 	}
 }
 
 func (h *exampleHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
 	user := string(req.Request.User)
 
-	log.Printf("Accounting: user=%s args=%v from=%s userData=%v", user, req.Request.GetArgs(), req.RemoteAddr, req.UserData)
+	log.Printf("Accounting: user=%s args=%v from=%s userData=%v", user, req.Request.Args(), req.RemoteAddr, req.UserData)
 
 	return &gotacacs.AcctReply{Status: gotacacs.AcctStatusSuccess}
 }

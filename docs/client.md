@@ -123,7 +123,7 @@ if resp.IsPass() {
     fmt.Println("Authorization granted")
 
     // Get server-provided arguments
-    for _, arg := range resp.GetArgs() {
+    for _, arg := range resp.Args() {
         fmt.Printf("  %s\n", arg)
     }
 } else if resp.IsFail() {
@@ -150,7 +150,7 @@ if resp.IsPass() {
 | `IsPass()` | Returns true if authorized (PASS_ADD or PASS_REPL) |
 | `IsFail()` | Returns true if authorization denied |
 | `IsError()` | Returns true if server returned an error |
-| `GetArgs()` | Returns server-provided arguments as string slice |
+| `Args()` | Returns server-provided arguments as string slice |
 
 ## Accounting
 
