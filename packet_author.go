@@ -199,13 +199,6 @@ type AuthorResponse struct {
 	Data      []byte   // Additional data (optional)
 }
 
-// NewAuthorResponse creates a new AuthorResponse packet with the specified status.
-func NewAuthorResponse(status uint8) *AuthorResponse {
-	return &AuthorResponse{
-		Status: status,
-	}
-}
-
 // AddArg adds an argument to the authorization response.
 func (p *AuthorResponse) AddArg(arg string) {
 	p.RawArgs = append(p.RawArgs, []byte(arg))

@@ -269,16 +269,6 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 }
 
-func TestNewAuthorResponse(t *testing.T) {
-	t.Run("basic creation", func(t *testing.T) {
-		p := NewAuthorResponse(AuthorStatusPassAdd)
-		assert.Equal(t, uint8(AuthorStatusPassAdd), p.Status)
-		assert.Nil(t, p.RawArgs)
-		assert.Nil(t, p.ServerMsg)
-		assert.Nil(t, p.Data)
-	})
-}
-
 func TestAuthorResponseAddArg(t *testing.T) {
 	t.Run("add args", func(t *testing.T) {
 		p := &AuthorResponse{}

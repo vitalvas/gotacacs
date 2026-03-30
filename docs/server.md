@@ -294,7 +294,7 @@ func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorR
     if service == "shell" && h.isCommandAllowed(cmd) {
         return &gotacacs.AuthorResponse{
             Status: gotacacs.AuthorStatusPassAdd,
-            RawArgs: [][]byte{[]byte("priv-lvl=15")},
+            RawArgs: gotacacs.ArgsFromMap(map[string]string{"priv-lvl": "15"}),
         }
     }
 

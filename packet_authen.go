@@ -133,13 +133,6 @@ type AuthenReply struct {
 	Data      []byte // Authentication data (optional)
 }
 
-// NewAuthenReply creates a new AuthenReply packet with the specified status.
-func NewAuthenReply(status uint8) *AuthenReply {
-	return &AuthenReply{
-		Status: status,
-	}
-}
-
 // MarshalBinary encodes the AuthenReply packet to binary format.
 func (p *AuthenReply) MarshalBinary() ([]byte, error) {
 	serverMsgLen := len(p.ServerMsg)

@@ -109,7 +109,7 @@ func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.Au
 
 	return &gotacacs.AuthorResponse{
 		Status:  gotacacs.AuthorStatusPassAdd,
-		RawArgs: [][]byte{[]byte("priv-lvl=15")},
+		RawArgs: gotacacs.ArgsFromMap(map[string]string{"priv-lvl": "15"}),
 	}
 }
 

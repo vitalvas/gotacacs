@@ -279,20 +279,6 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 }
 
-func TestNewAcctReply(t *testing.T) {
-	t.Run("success reply", func(t *testing.T) {
-		p := NewAcctReply(AcctStatusSuccess)
-		assert.Equal(t, uint8(AcctStatusSuccess), p.Status)
-		assert.Nil(t, p.ServerMsg)
-		assert.Nil(t, p.Data)
-	})
-
-	t.Run("error reply", func(t *testing.T) {
-		p := NewAcctReply(AcctStatusError)
-		assert.Equal(t, uint8(AcctStatusError), p.Status)
-	})
-}
-
 func TestAcctReplyMarshalBinary(t *testing.T) {
 	t.Run("success reply encoding", func(t *testing.T) {
 		p := &AcctReply{Status: AcctStatusSuccess}

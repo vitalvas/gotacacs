@@ -217,13 +217,6 @@ type AcctReply struct {
 	Data      []byte // Additional data (optional)
 }
 
-// NewAcctReply creates a new AcctReply packet with the specified status.
-func NewAcctReply(status uint8) *AcctReply {
-	return &AcctReply{
-		Status: status,
-	}
-}
-
 // MarshalBinary encodes the AcctReply packet to binary format.
 func (p *AcctReply) MarshalBinary() ([]byte, error) {
 	serverMsgLen := len(p.ServerMsg)

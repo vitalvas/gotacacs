@@ -174,3 +174,15 @@ func IsServerPacket(p Packet) bool {
 func isBadSecretError(actualLen, expectedLen int) bool {
 	return expectedLen > actualLen*2+16
 }
+
+// ArgsFromMap converts key-value pairs to TACACS+ argument format ("key=value").
+func ArgsFromMap(m map[string]string) [][]byte {
+	if len(m) == 0 {
+		return nil
+	}
+	args := make([][]byte, 0, len(m))
+	for k, v := range m {
+		args = append(args, []byte(fmt.Sprintf("%s=%s", k, v)))
+	}
+	return args
+}

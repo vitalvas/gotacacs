@@ -660,3 +660,24 @@ func FuzzParsePacket(f *testing.F) {
 		}
 	})
 }
+
+func TestArgsFromMap(t *testing.T) {
+	t.Run("single pair", func(t *testing.T) {
+		args := ArgsFromMap(map[string]string{"priv-lvl": "15"})
+		require.Len(t, args, 1)
+		assert.Equal(t, []byte("priv-lvl=15"), args[0])
+	})
+
+	t.Run("multiple pairs", func(t *testing.T) {
+		args := ArgsFromMap(map[string]string{"priv-lvl": "15", "role": "admin"})
+		assert.Len(t, args, 2)
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		assert.Nil(t, ArgsFromMap(nil))
+	})
+
+	t.Run("empty map", func(t *testing.T) {
+		assert.Nil(t, ArgsFromMap(map[string]string{}))
+	})
+}

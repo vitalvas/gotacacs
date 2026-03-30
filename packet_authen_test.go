@@ -205,16 +205,6 @@ func TestAuthenStartMarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 }
 
-func TestNewAuthenReply(t *testing.T) {
-	t.Run("basic creation", func(t *testing.T) {
-		p := NewAuthenReply(AuthenStatusPass)
-		assert.Equal(t, uint8(AuthenStatusPass), p.Status)
-		assert.Equal(t, uint8(0), p.Flags)
-		assert.Nil(t, p.ServerMsg)
-		assert.Nil(t, p.Data)
-	})
-}
-
 func TestAuthenReplyMarshalBinary(t *testing.T) {
 	t.Run("minimal packet", func(t *testing.T) {
 		p := &AuthenReply{
