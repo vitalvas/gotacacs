@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/vitalvas/gotacacs/compare/v0.2.0...v0.3.0) (2026-03-30)
+
+
+### Features
+
+* add ArgsFromMap helper and remove trivial constructors ([548a536](https://github.com/vitalvas/gotacacs/commit/548a5361d6e94773d4b24c79483ad6ddc3746af2))
+
+
+### Bug Fixes
+
+* harden SDK for production readiness ([6b92590](https://github.com/vitalvas/gotacacs/commit/6b92590b4c1dd4da954565a688e359c7d415025a))
+
 ## [0.2.0](https://github.com/vitalvas/gotacacs/compare/v0.1.0...v0.2.0) (2026-03-21)
 
 
