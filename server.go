@@ -1124,8 +1124,12 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	}
 
 	req := &AuthenRequest{
-		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Start: start, UserData: copyUserData(cs.userData),
+		SessionID:  header.SessionID,
+		RemoteAddr: cs.remoteAddr,
+		LocalAddr:  cs.localAddr,
+		Header:     header,
+		Start:      start,
+		UserData:   copyUserData(cs.userData),
 	}
 	reply := s.handler.HandleAuthenStart(ctx, req)
 	if reply == nil {
@@ -1142,8 +1146,12 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 	}
 
 	req := &AuthenContinueRequest{
-		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Continue: cont, UserData: copyUserData(cs.userData),
+		SessionID:  header.SessionID,
+		RemoteAddr: cs.remoteAddr,
+		LocalAddr:  cs.localAddr,
+		Header:     header,
+		Continue:   cont,
+		UserData:   copyUserData(cs.userData),
 	}
 	reply := s.handler.HandleAuthenContinue(ctx, req)
 	if reply == nil {
@@ -1174,8 +1182,12 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 	}
 
 	req := &AuthorRequestContext{
-		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Request: request, UserData: copyUserData(cs.userData),
+		SessionID:  header.SessionID,
+		RemoteAddr: cs.remoteAddr,
+		LocalAddr:  cs.localAddr,
+		Header:     header,
+		Request:    request,
+		UserData:   copyUserData(cs.userData),
 	}
 	resp := s.handler.HandleAuthorRequest(ctx, req)
 	if resp == nil {
@@ -1213,8 +1225,12 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 	}
 
 	req := &AcctRequestContext{
-		SessionID: header.SessionID, RemoteAddr: cs.remoteAddr, LocalAddr: cs.localAddr,
-		Header: header, Request: request, UserData: copyUserData(cs.userData),
+		SessionID:  header.SessionID,
+		RemoteAddr: cs.remoteAddr,
+		LocalAddr:  cs.localAddr,
+		Header:     header,
+		Request:    request,
+		UserData:   copyUserData(cs.userData),
 	}
 	resp := s.handler.HandleAcctRequest(ctx, req)
 	if resp == nil {

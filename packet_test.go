@@ -480,7 +480,14 @@ func BenchmarkParseAuthorPacket(b *testing.B) {
 
 func BenchmarkParseAcctPacket(b *testing.B) {
 	b.Run("request", func(b *testing.B) {
-		p := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+		p := &AcctRequest{
+			Flags:        AcctFlagStart,
+			AuthenMethod: AuthenTypePAP,
+			PrivLevel:    1,
+			AuthenType:   AuthenTypePAP,
+			Service:      AuthenServiceLogin,
+			User:         []byte("user"),
+		}
 		data, _ := p.MarshalBinary()
 
 		b.ReportAllocs()
@@ -594,7 +601,14 @@ func FuzzParseAuthorPacket(f *testing.F) {
 }
 
 func FuzzParseAcctPacket(f *testing.F) {
-	req := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	req := &AcctRequest{
+		Flags:        AcctFlagStart,
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    1,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("user"),
+	}
 	if data, _ := req.MarshalBinary(); data != nil {
 		f.Add(uint8(1), data)
 	}
@@ -632,7 +646,14 @@ func FuzzParsePacket(f *testing.F) {
 		f.Add(uint8(PacketTypeAuthor), uint8(1), data)
 	}
 
-	acctReq := &AcctRequest{Flags: AcctFlagStart, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	acctReq := &AcctRequest{
+		Flags:        AcctFlagStart,
+		AuthenMethod: AuthenTypePAP,
+		PrivLevel:    1,
+		AuthenType:   AuthenTypePAP,
+		Service:      AuthenServiceLogin,
+		User:         []byte("user"),
+	}
 	if data, _ := acctReq.MarshalBinary(); data != nil {
 		f.Add(uint8(PacketTypeAcct), uint8(1), data)
 	}
