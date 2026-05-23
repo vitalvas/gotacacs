@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/vitalvas/gotacacs/compare/v0.3.0...v0.4.0) (2026-05-23)
+
+
+### Features
+
+* add ArgValues helpers ([a7ea794](https://github.com/vitalvas/gotacacs/commit/a7ea794bab2388fb834123a8b2a15c67ec9e04aa))
+
+
+### Bug Fixes
+
+* harden protocol validation and docs ([48db5f8](https://github.com/vitalvas/gotacacs/commit/48db5f82c60d858a8fb1e7c56cbd0990d62cec5f))
+
 ## [0.3.0](https://github.com/vitalvas/gotacacs/compare/v0.2.0...v0.3.0) (2026-03-30)
 
 
