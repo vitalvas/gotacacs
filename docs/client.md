@@ -30,7 +30,7 @@ client := gotacacs.NewClient(
 | `WithTLSConfig(config *tls.Config)` | TLS 1.3 configuration for RFC 9887 compliant connections | None (plain TCP) |
 | `WithDialer(dialer Dialer)` | Custom dialer implementation | TCPDialer |
 | `WithSingleConnect(enabled bool)` | Enable connection reuse | false |
-| `WithMaxBodyLength(length uint32)` | Maximum allowed response body length | 65535 |
+| `WithMaxBodyLength(length uint32)` | Maximum allowed response body length | 256 KiB |
 
 ## Authentication
 
@@ -318,7 +318,7 @@ Implement the `Dialer` interface for custom connection handling:
 
 ```go
 type Dialer interface {
-    Dial(ctx context.Context, network, address string) (Conn, error)
+    Dial(ctx context.Context, network, address string) (net.Conn, error)
 }
 ```
 
@@ -329,7 +329,7 @@ type customDialer struct {
     timeout time.Duration
 }
 
-func (d *customDialer) Dial(ctx context.Context, network, address string) (gotacacs.Conn, error) {
+func (d *customDialer) Dial(ctx context.Context, network, address string) (net.Conn, error) {
     dialer := &net.Dialer{
         Timeout: d.timeout,
     }
@@ -399,7 +399,7 @@ client := gotacacs.NewClient(
     gotacacs.WithAddress("tacacs.example.com:300"),
     gotacacs.WithTimeout(30*time.Second),
     gotacacs.WithTLSConfig(tlsConfig),
-    gotacacs.WithMaxBodyLength(65535),
+    gotacacs.WithMaxBodyLength(gotacacs.DefaultMaxBodyLength),
 )
 defer client.Close()
 ```

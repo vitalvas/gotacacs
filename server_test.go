@@ -457,6 +457,60 @@ func TestServerShutdownForcesClose(t *testing.T) {
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.False(t, server.IsRunning())
 	})
+
+	t.Run("expired context returns even when handler ignores shutdown", func(t *testing.T) {
+		ln, err := ListenTCP("127.0.0.1:0")
+		require.NoError(t, err)
+
+		handlerStarted := make(chan struct{})
+		blockHandler := make(chan struct{})
+		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+			close(handlerStarted)
+			<-blockHandler
+			return &AuthenReply{Status: AuthenStatusError}
+		})
+
+		server := NewServer(
+			WithServerListener(ln),
+			WithServerSecret("testsecret"),
+			WithAuthenticationHandler(handler),
+			WithServerReadTimeout(10*time.Second),
+		)
+
+		go func() { server.Serve() }()
+		time.Sleep(50 * time.Millisecond)
+
+		clientDone := make(chan struct{})
+		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"), WithTimeout(10*time.Second))
+		go func() {
+			defer close(clientDone)
+			client.Authenticate(context.Background(), "testuser", "pass")
+		}()
+
+		<-handlerStarted
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		shutdownDone := make(chan error, 1)
+		started := time.Now()
+		go func() {
+			shutdownDone <- server.Shutdown(ctx)
+		}()
+
+		select {
+		case err := <-shutdownDone:
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Less(t, time.Since(started), 500*time.Millisecond)
+		case <-time.After(500 * time.Millisecond):
+			close(blockHandler)
+			t.Fatal("Shutdown did not return after context deadline")
+		}
+
+		close(blockHandler)
+		<-clientDone
+		assert.False(t, server.IsRunning())
+	})
 }
 
 func TestServerHandlerReceivesShutdownContext(t *testing.T) {
@@ -2770,7 +2824,7 @@ func TestMiddlewareHandler(t *testing.T) {
 
 func TestComposedHandlerAuthenContinueNil(t *testing.T) {
 	t.Run("nil authen handler returns error on continue", func(t *testing.T) {
-		h := &composedHandler{authen: nil, author: nil, acct: nil}
+		h := &ComposedHandler{authen: nil, author: nil, acct: nil}
 		reply := h.HandleAuthenContinue(context.Background(), &AuthenContinueRequest{})
 		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
 		assert.Contains(t, string(reply.ServerMsg), "no authentication handler")

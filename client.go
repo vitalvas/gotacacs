@@ -309,6 +309,13 @@ func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
 		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
 	}
 
+	// Reject unencrypted flag on non-TLS connections when a secret is configured.
+	// This mirrors the server-side check and prevents peers from bypassing
+	// TACACS+ body obfuscation on plaintext transports.
+	if !isTLS && header.IsUnencrypted() && len(c.secret) > 0 {
+		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections with shared secret", ErrInvalidPacket)
+	}
+
 	// Read body
 	var body []byte
 	if header.Length > 0 {
@@ -455,6 +462,14 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 			c.closeConnection()
 		}
 		return reply, ErrAuthenRestart
+	case AuthenStatusGetData, AuthenStatusGetUser, AuthenStatusGetPass:
+		session.SetState(SessionStateError)
+		c.closeConnection()
+		return reply, fmt.Errorf("%w: interactive authentication status %d returned to non-interactive Authenticate", ErrInvalidPacket, reply.Status)
+	default:
+		session.SetState(SessionStateError)
+		c.closeConnection()
+		return reply, fmt.Errorf("%w: unexpected authentication status %d", ErrInvalidPacket, reply.Status)
 	}
 
 	// Close connection if not using single-connect or server rejected it
@@ -705,10 +720,15 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	}
 
 	// Update session state
-	if resp.IsPass() {
+	switch resp.Status {
+	case AuthorStatusPassAdd, AuthorStatusPassRepl:
 		session.SetState(SessionStateComplete)
-	} else {
+	case AuthorStatusFail, AuthorStatusError, AuthorStatusFollow:
 		session.SetState(SessionStateError)
+	default:
+		session.SetState(SessionStateError)
+		c.closeConnection()
+		return resp, fmt.Errorf("%w: unexpected authorization status %d", ErrInvalidPacket, resp.Status)
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect
@@ -799,10 +819,15 @@ func (c *Client) Accounting(ctx context.Context, flags uint8, username string, a
 	}
 
 	// Update session state
-	if reply.IsSuccess() {
+	switch reply.Status {
+	case AcctStatusSuccess:
 		session.SetState(SessionStateComplete)
-	} else {
+	case AcctStatusError, AcctStatusFollow:
 		session.SetState(SessionStateError)
+	default:
+		session.SetState(SessionStateError)
+		c.closeConnection()
+		return reply, fmt.Errorf("%w: unexpected accounting status %d", ErrInvalidPacket, reply.Status)
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect

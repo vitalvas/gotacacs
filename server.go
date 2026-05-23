@@ -198,36 +198,36 @@ type ServerHooks struct {
 	OnPacketError  func(event PacketErrorEvent)
 }
 
-// composedHandler combines separate handler interfaces into a single Handler.
+// ComposedHandler combines separate handler interfaces into a single Handler.
 // Methods return error responses when the corresponding handler is nil.
-type composedHandler struct {
+type ComposedHandler struct {
 	authen AuthenticationHandler
 	author AuthorizationHandler
 	acct   AccountingHandler
 }
 
-func (h *composedHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
+func (h *ComposedHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
 	if h.authen == nil {
 		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
 	}
 	return h.authen.HandleAuthenStart(ctx, req)
 }
 
-func (h *composedHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
+func (h *ComposedHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
 	if h.authen == nil {
 		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
 	}
 	return h.authen.HandleAuthenContinue(ctx, req)
 }
 
-func (h *composedHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
+func (h *ComposedHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
 	if h.author == nil {
 		return &AuthorResponse{Status: AuthorStatusError, ServerMsg: []byte("no authorization handler configured")}
 	}
 	return h.author.HandleAuthorRequest(ctx, req)
 }
 
-func (h *composedHandler) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
+func (h *ComposedHandler) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
 	if h.acct == nil {
 		return &AcctReply{Status: AcctStatusError, ServerMsg: []byte("no accounting handler configured")}
 	}
@@ -401,7 +401,7 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	// Build combined handler from individual handlers
-	s.handler = &composedHandler{
+	s.handler = &ComposedHandler{
 		authen: s.authenHandler,
 		author: s.authorHandler,
 		acct:   s.acctHandler,
@@ -496,8 +496,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			value.(net.Conn).Close()
 			return true
 		})
-		// Wait for handler goroutines to finish after force close
-		<-done
 		return ctx.Err()
 	}
 }

@@ -16,6 +16,7 @@ import (
 type mockResponseConfig struct {
 	packetType uint8
 	seqNo      uint8
+	flags      uint8
 	sessionMod uint32 // added to session ID (0 = correct, 1+ = mismatch)
 	body       []byte
 }
@@ -38,6 +39,7 @@ func createMockHandler(secret []byte, cfg mockResponseConfig) func(net.Conn) {
 			Version:   0xc0,
 			Type:      cfg.packetType,
 			SeqNo:     cfg.seqNo,
+			Flags:     cfg.flags,
 			SessionID: header.SessionID + cfg.sessionMod,
 			Length:    uint32(len(cfg.body)),
 		}
@@ -1164,6 +1166,54 @@ func TestClientErrorPaths(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidSequence)
 	})
 
+	t.Run("authorize unknown status", func(t *testing.T) {
+		secret := []byte("testsecret")
+		resp := &AuthorResponse{Status: 0xFF}
+		respBody, _ := resp.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthor,
+			seqNo:      2,
+			body:       respBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.NotNil(t, result)
+		assert.Equal(t, uint8(0xFF), result.Status)
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("accounting unknown status", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AcctReply{Status: 0xFF}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.NotNil(t, result)
+		assert.Equal(t, uint8(0xFF), result.Status)
+		assert.False(t, client.IsConnected())
+	})
+
 	t.Run("RFC 9887 tlsMode on non-TLS connection uses obfuscation", func(t *testing.T) {
 		// This test verifies that even if tlsMode is set, a non-TLS connection
 		// still uses obfuscation (security fix for bug #2)
@@ -1223,6 +1273,29 @@ func TestClientErrorPaths(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, reply.IsPass())
+	})
+
+	t.Run("non-TLS response cannot bypass obfuscation with unencrypted flag", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			flags:      FlagUnencrypted,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.Contains(t, err.Error(), "unencrypted flag")
 	})
 }
 
@@ -1541,6 +1614,58 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.True(t, result.IsError())
+	})
+
+	t.Run("interactive status in non-interactive authenticate is invalid", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: AuthenStatusGetPass, ServerMsg: []byte("Password: ")}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.NotNil(t, result)
+		assert.Equal(t, uint8(AuthenStatusGetPass), result.Status)
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("unknown status in non-interactive authenticate is invalid", func(t *testing.T) {
+		secret := []byte("testsecret")
+		reply := &AuthenReply{Status: 0xFF}
+		replyBody, _ := reply.MarshalBinary()
+
+		handler := createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		})
+
+		server := newMockServer(t, handler)
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		result, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Username: "user",
+			Password: "pass",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidPacket)
+		assert.NotNil(t, result)
+		assert.Equal(t, uint8(0xFF), result.Status)
+		assert.False(t, client.IsConnected())
 	})
 
 	t.Run("server rejects single connect for follow", func(t *testing.T) {

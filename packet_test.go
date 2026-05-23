@@ -35,6 +35,34 @@ func TestPacketInterfaceCompliance(t *testing.T) {
 	}
 }
 
+func TestPacketUnmarshalRejectsTrailingBytes(t *testing.T) {
+	packets := []struct {
+		name   string
+		packet Packet
+	}{
+		{"AuthenStart", &AuthenStart{}},
+		{"AuthenReply", &AuthenReply{}},
+		{"AuthenContinue", &AuthenContinue{}},
+		{"AuthorRequest", &AuthorRequest{}},
+		{"AuthorResponse", &AuthorResponse{}},
+		{"AcctRequest", &AcctRequest{}},
+		{"AcctReply", &AcctReply{}},
+	}
+
+	for _, tc := range packets {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := tc.packet.MarshalBinary()
+			require.NoError(t, err)
+
+			decoded := createPacketOfSameType(tc.packet)
+			err = decoded.UnmarshalBinary(append(data, 0x00))
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidPacket)
+		})
+	}
+}
+
 func createPacketOfSameType(p Packet) Packet {
 	switch p.(type) {
 	case *AuthenStart:

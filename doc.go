@@ -81,8 +81,8 @@
 //
 //	func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
 //		return &gotacacs.AuthorResponse{
-//			Status: gotacacs.AuthorStatusPassAdd,
-//			Args:   [][]byte{[]byte("priv-lvl=15")},
+//			Status:  gotacacs.AuthorStatusPassAdd,
+//			RawArgs: gotacacs.ArgsFromMap(map[string]string{"priv-lvl": "15"}),
 //		}
 //	}
 //
@@ -94,7 +94,7 @@
 //
 // Use SecretProviderFunc to return different secrets and custom user data per client:
 //
-//	secretProvider := gotacacs.SecretProviderFunc(func(ctx context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+//	secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
 //		return gotacacs.SecretResponse{
 //			Secret: []byte("sharedsecret"),
 //			UserData: map[string]string{

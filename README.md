@@ -101,8 +101,8 @@ func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenCo
 
 func (h *myHandler) HandleAuthorRequest(_ context.Context, _ *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
     return &gotacacs.AuthorResponse{
-        Status: gotacacs.AuthorStatusPassAdd,
-        Args:   [][]byte{[]byte("priv-lvl=15")},
+        Status:  gotacacs.AuthorStatusPassAdd,
+        RawArgs: gotacacs.ArgsFromMap(map[string]string{"priv-lvl": "15"}),
     }
 }
 
@@ -114,7 +114,7 @@ func (h *myHandler) HandleAcctRequest(_ context.Context, _ *gotacacs.AcctRequest
 ### Per-Client Secret Provider
 
 ```go
-secretProvider := gotacacs.SecretProviderFunc(func(ctx context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
     return gotacacs.SecretResponse{
         Secret: []byte("sharedsecret"),
         UserData: map[string]string{

@@ -147,6 +147,9 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
 	}
+	if len(data) > expectedLen {
+		return fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidPacket, expectedLen, len(data))
+	}
 
 	// Read variable fields
 	if userLen > 0 {
@@ -307,6 +310,9 @@ func (p *AuthorResponse) UnmarshalBinary(data []byte) error {
 			return fmt.Errorf("%w: calculated length %d far exceeds actual %d", ErrBadSecret, expectedLen, len(data))
 		}
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, expectedLen, len(data))
+	}
+	if len(data) > expectedLen {
+		return fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidPacket, expectedLen, len(data))
 	}
 
 	// Read variable fields

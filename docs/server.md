@@ -42,6 +42,7 @@ if err := server.Serve(); err != nil {
 | `WithAccountingHandler(handler)` | Accounting-only handler | None |
 | `WithServerReadTimeout(duration)` | Read timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
+| `WithServerMaxBodyLength(length uint32)` | Maximum allowed request body length | 256 KiB |
 | `WithServerHooks(hooks)` | Lifecycle event hooks | None |
 | `WithMiddleware(middlewares...)` | Handler middleware chain | None |
 
@@ -360,7 +361,7 @@ type SecretProvider interface {
 ### Implementation Example
 
 ```go
-secretProvider := gotacacs.SecretProviderFunc(func(ctx context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
+secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
     host, _, _ := net.SplitHostPort(req.RemoteAddr.String())
 
     // Look up client configuration
@@ -416,9 +417,16 @@ secrets := map[string][]string{
 secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
     host, _, _ := net.SplitHostPort(req.RemoteAddr.String())
     clientSecrets := secrets[host]
+    if len(clientSecrets) == 0 {
+        clientSecrets = []string{"defaultsecret"}
+    }
+    attempt := req.Attempt
+    if attempt >= len(clientSecrets) {
+        attempt = 0
+    }
 
     return gotacacs.SecretResponse{
-        Secret:   []byte(clientSecrets[req.Attempt]),
+        Secret:   []byte(clientSecrets[attempt]),
         Attempts: len(clientSecrets),
     }
 })
@@ -750,7 +758,7 @@ defer ln.Close()
 
 ### Custom Listener
 
-Wrap any `net.Listener`:
+Any `net.Listener` satisfies the server `Listener` interface:
 
 ```go
 netLn, err := net.Listen("tcp", ":49")
@@ -760,7 +768,10 @@ if err != nil {
 
 // Apply custom configuration to netLn...
 
-ln := &customListener{Listener: netLn}
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(netLn),
+    gotacacs.WithHandler(handler),
+)
 ```
 
 ## Error Handling
@@ -807,9 +818,11 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
 
 5. **Set Timeouts**: Configure read/write timeouts to prevent resource exhaustion.
 
-6. **Graceful Shutdown**: Implement proper shutdown handling for clean termination.
+6. **Limit Body Size**: Set `WithServerMaxBodyLength` to prevent memory exhaustion from malicious clients.
 
-7. **Validate Input**: Always validate user input from requests.
+7. **Graceful Shutdown**: Implement proper shutdown handling for clean termination.
+
+8. **Validate Input**: Always validate user input from requests.
 
 ```go
 ln, err := gotacacs.ListenTLS(":300", tlsConfig)
@@ -822,6 +835,7 @@ server := gotacacs.NewServer(
     gotacacs.WithHandler(handler),
     gotacacs.WithServerReadTimeout(30*time.Second),
     gotacacs.WithServerWriteTimeout(30*time.Second),
+    gotacacs.WithServerMaxBodyLength(gotacacs.DefaultMaxBodyLength),
 )
 
 // Graceful shutdown
