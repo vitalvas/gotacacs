@@ -14,6 +14,7 @@ Provides both client and server SDK interfaces for Authentication, Authorization
 - Body obfuscation (MD5-based pseudo-pad)
 - Single-connect mode for connection reuse
 - Per-client secret provider with custom user data
+- Argument helpers for TACACS+ `key=value` attributes
 - Graceful server shutdown
 
 ## Requirements

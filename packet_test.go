@@ -719,7 +719,7 @@ func TestArgsFromMap(t *testing.T) {
 
 	t.Run("multiple pairs", func(t *testing.T) {
 		args := ArgsFromMap(map[string]string{"priv-lvl": "15", "role": "admin"})
-		assert.Len(t, args, 2)
+		assert.Equal(t, [][]byte{[]byte("priv-lvl=15"), []byte("role=admin")}, args)
 	})
 
 	t.Run("nil map", func(t *testing.T) {
@@ -728,5 +728,158 @@ func TestArgsFromMap(t *testing.T) {
 
 	t.Run("empty map", func(t *testing.T) {
 		assert.Nil(t, ArgsFromMap(map[string]string{}))
+	})
+}
+
+func TestArgValues(t *testing.T) {
+	t.Run("output example", func(t *testing.T) {
+		v := ArgValues{"priv-lvl": []string{"15"}}
+		v.Add("local-user-name", "remote-readonly")
+		v.Add("allow-commands1", "qwerty")
+		v.Del("test")
+
+		assert.Equal(t, []string{
+			"allow-commands1=qwerty",
+			"local-user-name=remote-readonly",
+			"priv-lvl=15",
+		}, v.Strings())
+		assert.Equal(t, [][]byte{
+			[]byte("allow-commands1=qwerty"),
+			[]byte("local-user-name=remote-readonly"),
+			[]byte("priv-lvl=15"),
+		}, v.Output())
+	})
+
+	t.Run("get set add del has", func(t *testing.T) {
+		v := ArgValues{}
+
+		assert.False(t, v.Has("role"))
+		assert.Empty(t, v.Get("role"))
+
+		v.Set("role", "readonly")
+		assert.True(t, v.Has("role"))
+		assert.Equal(t, "readonly", v.Get("role"))
+
+		v.Add("role", "operator")
+		assert.Equal(t, []string{"readonly", "operator"}, v["role"])
+		assert.Equal(t, "readonly", v.Get("role"))
+
+		v.Del("role")
+		assert.False(t, v.Has("role"))
+		assert.Empty(t, v.Get("role"))
+	})
+
+	t.Run("multiple values preserve value order", func(t *testing.T) {
+		v := ArgValues{"cmd-arg": []string{"show", "running-config"}}
+
+		assert.Equal(t, []string{
+			"cmd-arg=show",
+			"cmd-arg=running-config",
+		}, v.Strings())
+		assert.Equal(t, [][]byte{
+			[]byte("cmd-arg=show"),
+			[]byte("cmd-arg=running-config"),
+		}, v.Output())
+	})
+
+	t.Run("empty value is emitted", func(t *testing.T) {
+		v := ArgValues{"optional": []string{""}}
+
+		assert.Equal(t, []string{"optional="}, v.Strings())
+		assert.Equal(t, [][]byte{[]byte("optional=")}, v.Output())
+	})
+
+	t.Run("empty and nil values are omitted", func(t *testing.T) {
+		assert.Nil(t, ArgValues(nil).Strings())
+		assert.Nil(t, ArgValues{}.Strings())
+		assert.Nil(t, ArgValues{"empty": nil}.Strings())
+		assert.Nil(t, ArgValues{"empty": []string{}}.Strings())
+		assert.Nil(t, ArgValues(nil).Output())
+		assert.Nil(t, ArgValues{}.Output())
+		assert.Nil(t, ArgValues{"empty": nil}.Output())
+		assert.Nil(t, ArgValues{"empty": []string{}}.Output())
+	})
+}
+
+func TestArgValuesParsing(t *testing.T) {
+	t.Run("from string args", func(t *testing.T) {
+		values := ArgValuesFromArgs([]string{
+			"service=shell",
+			"cmd=show=version",
+			"cmd-arg=running-config",
+			"cmd-arg=all",
+			"optional=",
+			"ignored",
+		})
+
+		assert.Equal(t, "shell", values.Get("service"))
+		assert.Equal(t, []string{"show=version"}, values["cmd"])
+		assert.Equal(t, []string{"running-config", "all"}, values["cmd-arg"])
+		assert.Equal(t, []string{""}, values["optional"])
+		assert.False(t, values.Has("ignored"))
+	})
+
+	t.Run("from raw args", func(t *testing.T) {
+		values := ArgValuesFromRawArgs([][]byte{
+			[]byte("priv-lvl=15"),
+			nil,
+			[]byte("role=readonly"),
+			[]byte("role=operator"),
+		})
+
+		assert.Equal(t, "15", values.Get("priv-lvl"))
+		assert.Equal(t, []string{"readonly", "operator"}, values["role"])
+		assert.False(t, values.Has(""))
+	})
+
+	t.Run("nil empty and malformed", func(t *testing.T) {
+		assert.Nil(t, ArgValuesFromArgs(nil))
+		assert.Nil(t, ArgValuesFromArgs([]string{}))
+		assert.Nil(t, ArgValuesFromArgs([]string{"malformed"}))
+		assert.Nil(t, ArgValuesFromRawArgs(nil))
+		assert.Nil(t, ArgValuesFromRawArgs([][]byte{}))
+		assert.Nil(t, ArgValuesFromRawArgs([][]byte{[]byte("malformed")}))
+	})
+}
+
+func TestPacketArgValues(t *testing.T) {
+	t.Run("authorization request", func(t *testing.T) {
+		req := &AuthorRequest{
+			RawArgs: [][]byte{
+				[]byte("service=shell"),
+				[]byte("cmd=show"),
+			},
+		}
+
+		values := req.ArgValues()
+		assert.Equal(t, "shell", values.Get("service"))
+		assert.Equal(t, "show", values.Get("cmd"))
+	})
+
+	t.Run("authorization response", func(t *testing.T) {
+		resp := &AuthorResponse{
+			RawArgs: [][]byte{
+				[]byte("priv-lvl=15"),
+				[]byte("role=readonly"),
+				[]byte("role=operator"),
+			},
+		}
+
+		values := resp.ArgValues()
+		assert.Equal(t, "15", values.Get("priv-lvl"))
+		assert.Equal(t, []string{"readonly", "operator"}, values["role"])
+	})
+
+	t.Run("accounting request", func(t *testing.T) {
+		req := &AcctRequest{
+			RawArgs: [][]byte{
+				[]byte("task_id=123"),
+				[]byte("service=shell"),
+			},
+		}
+
+		values := req.ArgValues()
+		assert.Equal(t, "123", values.Get("task_id"))
+		assert.Equal(t, "shell", values.Get("service"))
 	})
 }

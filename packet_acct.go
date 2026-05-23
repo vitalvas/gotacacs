@@ -44,6 +44,11 @@ func (p *AcctRequest) Args() []string {
 	return result
 }
 
+// ArgValues returns accounting arguments parsed by key.
+func (p *AcctRequest) ArgValues() ArgValues {
+	return ArgValuesFromRawArgs(p.RawArgs)
+}
+
 // IsStart returns true if the START flag is set.
 func (p *AcctRequest) IsStart() bool {
 	return p.Flags&AcctFlagStart != 0

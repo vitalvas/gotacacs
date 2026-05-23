@@ -42,6 +42,11 @@ func (p *AuthorRequest) Args() []string {
 	return result
 }
 
+// ArgValues returns authorization arguments parsed by key.
+func (p *AuthorRequest) ArgValues() ArgValues {
+	return ArgValuesFromRawArgs(p.RawArgs)
+}
+
 // MarshalBinary encodes the AuthorRequest packet to binary format.
 func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)
@@ -214,6 +219,11 @@ func (p *AuthorResponse) Args() []string {
 		result[i] = string(arg)
 	}
 	return result
+}
+
+// ArgValues returns authorization response arguments parsed by key.
+func (p *AuthorResponse) ArgValues() ArgValues {
+	return ArgValuesFromRawArgs(p.RawArgs)
 }
 
 // MarshalBinary encodes the AuthorResponse packet to binary format.

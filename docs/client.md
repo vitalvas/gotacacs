@@ -120,15 +120,14 @@ if err != nil {
 }
 
 if resp.IsPass() {
-    fmt.Println("Authorization granted")
+	fmt.Println("Authorization granted")
 
-    // Get server-provided arguments
-    for _, arg := range resp.Args() {
-        fmt.Printf("  %s\n", arg)
-    }
+	// Get server-provided arguments by key
+	values := resp.ArgValues()
+	fmt.Printf("Privilege level: %s\n", values.Get("priv-lvl"))
 } else if resp.IsFail() {
-    fmt.Println("Authorization denied")
-    fmt.Printf("Reason: %s\n", string(resp.ServerMsg))
+	fmt.Println("Authorization denied")
+	fmt.Printf("Reason: %s\n", string(resp.ServerMsg))
 }
 ```
 
@@ -151,6 +150,7 @@ if resp.IsPass() {
 | `IsFail()` | Returns true if authorization denied |
 | `IsError()` | Returns true if server returned an error |
 | `Args()` | Returns server-provided arguments as string slice |
+| `ArgValues()` | Returns server-provided `key=value` arguments parsed by key |
 
 ## Accounting
 

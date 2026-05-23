@@ -276,20 +276,9 @@ Parse and process authorization arguments:
 
 ```go
 func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
-    args := req.Request.Args()
-
-    var service, cmd string
-    for _, arg := range args {
-        parts := strings.SplitN(arg, "=", 2)
-        if len(parts) == 2 {
-            switch parts[0] {
-            case "service":
-                service = parts[1]
-            case "cmd":
-                cmd = parts[1]
-            }
-        }
-    }
+    values := req.Request.ArgValues()
+    service := values.Get("service")
+    cmd := values.Get("cmd")
 
     // Check authorization
     if service == "shell" && h.isCommandAllowed(cmd) {
@@ -303,6 +292,21 @@ func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorR
         Status:    gotacacs.AuthorStatusFail,
         ServerMsg: []byte("Command not authorized"),
     }
+}
+```
+
+Build response arguments with `ArgValues` when an attribute can have multiple
+values:
+
+```go
+values := gotacacs.ArgValues{"priv-lvl": []string{"15"}}
+values.Add("local-user-name", "remote-readonly")
+values.Add("allow-commands1", "show.*")
+values.Del("deprecated-attribute")
+
+resp := &gotacacs.AuthorResponse{
+    Status:  gotacacs.AuthorStatusPassAdd,
+    RawArgs: values.Output(),
 }
 ```
 

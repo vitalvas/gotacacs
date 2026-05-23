@@ -3,6 +3,8 @@ package gotacacs
 import (
 	"encoding"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // Packet is the interface that all TACACS+ packet types implement.
@@ -175,14 +177,127 @@ func isBadSecretError(actualLen, expectedLen int) bool {
 	return expectedLen > actualLen*2+16
 }
 
+// ArgValues maps TACACS+ argument keys to values.
+// It is similar to net/url.Values, but Output returns TACACS+ "key=value"
+// byte arguments without URL escaping.
+type ArgValues map[string][]string
+
+// Get returns the first value associated with key.
+// It returns an empty string when key has no values.
+func (v ArgValues) Get(key string) string {
+	if vs := v[key]; len(vs) > 0 {
+		return vs[0]
+	}
+	return ""
+}
+
+// Set sets key to a single value.
+func (v ArgValues) Set(key, value string) {
+	v[key] = []string{value}
+}
+
+// Add appends value to key.
+func (v ArgValues) Add(key, value string) {
+	v[key] = append(v[key], value)
+}
+
+// Del deletes key and all associated values.
+func (v ArgValues) Del(key string) {
+	delete(v, key)
+}
+
+// Has reports whether key is present.
+func (v ArgValues) Has(key string) bool {
+	_, ok := v[key]
+	return ok
+}
+
+// Strings converts key-value pairs to TACACS+ argument format ("key=value").
+// Keys are sorted for deterministic output. Keys with no values are omitted.
+func (v ArgValues) Strings() []string {
+	if len(v) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(v))
+	argCount := 0
+	for key, values := range v {
+		if len(values) == 0 {
+			continue
+		}
+		keys = append(keys, key)
+		argCount += len(values)
+	}
+	if argCount == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+
+	args := make([]string, 0, argCount)
+	for _, key := range keys {
+		for _, value := range v[key] {
+			args = append(args, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	return args
+}
+
+// Output converts key-value pairs to TACACS+ raw byte arguments.
+func (v ArgValues) Output() [][]byte {
+	stringArgs := v.Strings()
+	if len(stringArgs) == 0 {
+		return nil
+	}
+
+	args := make([][]byte, 0, len(stringArgs))
+	for _, arg := range stringArgs {
+		args = append(args, []byte(arg))
+	}
+	return args
+}
+
+// ArgValuesFromArgs parses TACACS+ "key=value" arguments into ArgValues.
+// Arguments without "=" are ignored.
+func ArgValuesFromArgs(args []string) ArgValues {
+	var values ArgValues
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			continue
+		}
+		if values == nil {
+			values = make(ArgValues)
+		}
+		values.Add(key, value)
+	}
+	return values
+}
+
+// ArgValuesFromRawArgs parses TACACS+ raw byte arguments into ArgValues.
+// Arguments without "=" are ignored.
+func ArgValuesFromRawArgs(rawArgs [][]byte) ArgValues {
+	var values ArgValues
+	for _, arg := range rawArgs {
+		key, value, ok := strings.Cut(string(arg), "=")
+		if !ok {
+			continue
+		}
+		if values == nil {
+			values = make(ArgValues)
+		}
+		values.Add(key, value)
+	}
+	return values
+}
+
 // ArgsFromMap converts key-value pairs to TACACS+ argument format ("key=value").
 func ArgsFromMap(m map[string]string) [][]byte {
 	if len(m) == 0 {
 		return nil
 	}
-	args := make([][]byte, 0, len(m))
+	values := make(ArgValues, len(m))
 	for k, v := range m {
-		args = append(args, []byte(fmt.Sprintf("%s=%s", k, v)))
+		values.Set(k, v)
 	}
-	return args
+	return values.Output()
 }
