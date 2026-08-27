@@ -3,8 +3,11 @@ package gotacacs
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -372,6 +375,45 @@ func TestServerServeAcceptErrorResetsRunning(t *testing.T) {
 		assert.Error(t, err)
 		assert.False(t, server.IsRunning())
 	})
+}
+
+func TestServerAcceptErrorClosesActiveConnections(t *testing.T) {
+	ln, err := ListenTCP("127.0.0.1:0")
+	require.NoError(t, err)
+	server := NewServer(WithServerListener(ln), WithServerReadTimeout(10*time.Second))
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve()
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	require.Eventually(t, func() bool {
+		active := false
+		server.activeConns.Range(func(_, _ any) bool {
+			active = true
+			return false
+		})
+		return active
+	}, time.Second, 5*time.Millisecond)
+
+	require.NoError(t, ln.Close())
+	require.Error(t, <-serveDone)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err = conn.Read(make([]byte, 1))
+	require.Error(t, err)
+	require.Eventually(t, func() bool {
+		active := false
+		server.activeConns.Range(func(_, _ any) bool {
+			active = true
+			return false
+		})
+		return !active
+	}, time.Second, 5*time.Millisecond)
+	require.NoError(t, server.Shutdown(context.Background()))
 }
 
 func TestServerRestart(t *testing.T) {
@@ -4315,4 +4357,434 @@ func TestSequenceOverflowCleanup(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		assert.Empty(t, server.Sessions())
 	})
+}
+
+// pipeDialer returns a preconnected net.Conn on Dial, allowing a Client to be
+// driven over a net.Pipe whose server end is handed to ServeConn.
+type pipeDialer struct {
+	conn net.Conn
+}
+
+func (d *pipeDialer) Dial(_ context.Context, _, _ string) (net.Conn, error) {
+	if d.conn == nil {
+		return nil, errors.New("pipeDialer: no connection")
+	}
+	conn := d.conn
+	d.conn = nil
+	return conn, nil
+}
+
+// newServeConnPair wires a Client to a Server over net.Pipe. The server end is
+// served with ServeConn in a goroutine; the returned client talks to it. The
+// cleanup closes both ends and waits for ServeConn to return.
+func newServeConnPair(t *testing.T, server *Server, secret string) (*Client, func()) {
+	t.Helper()
+
+	serverConn, clientConn := net.Pipe()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = server.ServeConn(serverConn)
+	}()
+
+	opts := []ClientOption{
+		WithAddress("pipe"),
+		WithDialer(&pipeDialer{conn: clientConn}),
+	}
+	if secret != "" {
+		opts = append(opts, WithSecret(secret))
+	}
+	client := NewClient(opts...)
+
+	cleanup := func() {
+		client.Close()
+		serverConn.Close()
+		<-done
+	}
+	return client, cleanup
+}
+
+// asciiFlowHandler drives a full ASCII exchange: START -> GETUSER -> CONTINUE
+// -> GETPASS -> CONTINUE -> PASS, so the multi-step continue path is exercised.
+type asciiFlowHandler struct {
+	testHandler
+	step atomic.Int32
+}
+
+func (h *asciiFlowHandler) HandleAuthenStart(_ context.Context, _ *AuthenRequest) *AuthenReply {
+	return &AuthenReply{Status: AuthenStatusGetUser, ServerMsg: []byte("Username: ")}
+}
+
+func (h *asciiFlowHandler) HandleAuthenContinue(_ context.Context, _ *AuthenContinueRequest) *AuthenReply {
+	if h.step.Add(1) == 1 {
+		return &AuthenReply{Status: AuthenStatusGetPass, ServerMsg: []byte("Password: ")}
+	}
+	return &AuthenReply{Status: AuthenStatusPass}
+}
+
+func TestServeConnPAP(t *testing.T) {
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+
+	reply, err := client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+}
+
+func TestServeConnASCIIMultiExchange(t *testing.T) {
+	server := NewServer(WithHandler(&asciiFlowHandler{}), WithServerSecret("s3cr3t"))
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+
+	prompts := 0
+	reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
+		prompts++
+		return "reply", nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	assert.Equal(t, 2, prompts, "expected GETUSER and GETPASS prompts")
+}
+
+func TestServeConnAuthorize(t *testing.T) {
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+
+	resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthorStatusPassAdd), resp.Status)
+}
+
+func TestServeConnAccounting(t *testing.T) {
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+
+	reply, err := client.Accounting(context.Background(), AcctFlagStop, "testuser", []string{"service=shell"})
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AcctStatusSuccess), reply.Status)
+}
+
+func TestServeConnFiresHooks(t *testing.T) {
+	var connects, disconnects, sessions atomic.Int32
+	hooks := ServerHooks{
+		OnConnect:      func(ConnectEvent) { connects.Add(1) },
+		OnDisconnect:   func(DisconnectEvent) { disconnects.Add(1) },
+		OnSessionStart: func(SessionEvent) { sessions.Add(1) },
+	}
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"), WithServerHooks(hooks))
+
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = server.ServeConn(serverConn)
+	}()
+
+	client := NewClient(WithAddress("pipe"), WithDialer(&pipeDialer{conn: clientConn}), WithSecret("s3cr3t"))
+	reply, err := client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+
+	client.Close()
+	clientConn.Close()
+	<-done
+
+	assert.Equal(t, int32(1), connects.Load(), "OnConnect fired once")
+	assert.Equal(t, int32(1), sessions.Load(), "OnSessionStart fired once")
+	assert.Equal(t, int32(1), disconnects.Load(), "OnDisconnect fired once")
+}
+
+func TestServeConnNoListener(t *testing.T) {
+	// A server with no listener configured must still serve a caller-supplied
+	// connection: ServeConn lazily initializes the shutdown machinery.
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+	assert.Nil(t, server.Addr(), "no listener configured")
+
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+
+	reply, err := client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	assert.True(t, server.IsRunning(), "ServeConn marks the server running")
+}
+
+func TestServeStartsAfterServeConn(t *testing.T) {
+	ln, err := ListenTCP("127.0.0.1:0")
+	require.NoError(t, err)
+	server := NewServer(WithServerListener(ln), WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+
+	pipeClient, pipeCleanup := newServeConnPair(t, server, "s3cr3t")
+	defer pipeCleanup()
+	pipeReply, err := pipeClient.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), pipeReply.Status)
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve()
+	}()
+	require.Eventually(t, func() bool {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return server.serving
+	}, time.Second, 5*time.Millisecond)
+
+	client := NewClient(WithAddress(ln.Addr().String()), WithSecret("s3cr3t"))
+	reply, err := client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	client.Close()
+
+	require.NoError(t, server.Shutdown(context.Background()))
+	assert.NoError(t, <-serveDone)
+}
+
+func TestServeConnCleanClose(t *testing.T) {
+	server := NewServer()
+	serverConn, clientConn := net.Pipe()
+	clientConn.Close()
+
+	assert.NoError(t, server.ServeConn(serverConn))
+	require.NoError(t, server.Shutdown(context.Background()))
+}
+
+func TestServeConnShutdownCancels(t *testing.T) {
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(serverConn)
+	}()
+
+	// Wait until the connection is registered as active before shutting down.
+	require.Eventually(t, func() bool {
+		found := false
+		server.activeConns.Range(func(_, _ any) bool {
+			found = true
+			return false
+		})
+		return found
+	}, time.Second, 5*time.Millisecond)
+
+	// A ServeConn blocked in a pipe Read only unblocks when Shutdown forcibly
+	// closes the active connection, which happens once the context expires.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := server.Shutdown(shutdownCtx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+	select {
+	case <-errCh:
+		// ServeConn returned once the connection was forcibly closed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeConn did not return after Shutdown")
+	}
+}
+
+func TestServeConnRestartsAfterShutdown(t *testing.T) {
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+	reply, err := client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	cleanup()
+
+	require.NoError(t, server.Shutdown(context.Background()))
+	assert.False(t, server.IsRunning())
+
+	client, cleanup = newServeConnPair(t, server, "s3cr3t")
+	defer cleanup()
+	reply, err = client.Authenticate(context.Background(), "testuser", "password")
+	require.NoError(t, err)
+	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+}
+
+func TestServeConnRepeatedShutdownWaitsForHandlers(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
+		close(handlerStarted)
+		<-releaseHandler
+		return &AuthenReply{Status: AuthenStatusPass}
+	})
+	server := NewServer(WithAuthenticationHandler(handler), WithServerSecret("s3cr3t"))
+	client, cleanup := newServeConnPair(t, server, "s3cr3t")
+
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		_, _ = client.Authenticate(context.Background(), "testuser", "password")
+	}()
+	<-handlerStarted
+
+	firstCtx, firstCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer firstCancel()
+	assert.ErrorIs(t, server.Shutdown(firstCtx), context.DeadlineExceeded)
+
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer secondCancel()
+	assert.ErrorIs(t, server.Shutdown(secondCtx), context.DeadlineExceeded)
+
+	close(releaseHandler)
+	finalCtx, finalCancel := context.WithTimeout(context.Background(), time.Second)
+	defer finalCancel()
+	require.NoError(t, server.Shutdown(finalCtx))
+	<-clientDone
+	cleanup()
+}
+
+// sendPAPStart writes a raw PAP START packet with the given session ID over
+// conn and reads back the reply, deobfuscating it. It lets a test drive two
+// connections that deliberately reuse the same client-chosen session ID.
+func sendPAPStart(t *testing.T, conn net.Conn, secret []byte, sessionID uint32, user, pass string) *AuthenReply {
+	t.Helper()
+
+	start := &AuthenStart{
+		Action:     AuthenActionLogin,
+		PrivLevel:  1,
+		AuthenType: AuthenTypePAP,
+		Service:    AuthenServiceLogin,
+		User:       []byte(user),
+		Data:       []byte(pass),
+	}
+	body, err := start.MarshalBinary()
+	require.NoError(t, err)
+
+	header := &Header{
+		Version:   0xc1,
+		Type:      PacketTypeAuthen,
+		SeqNo:     1,
+		SessionID: sessionID,
+		Length:    uint32(len(body)),
+	}
+	headerBuf, err := header.MarshalBinary()
+	require.NoError(t, err)
+	require.NoError(t, WriteRawPacket(conn, headerBuf, Obfuscate(header, secret, body)))
+
+	rawHeader, rawBody, err := ReadRawPacket(conn, DefaultMaxBodyLength)
+	require.NoError(t, err)
+
+	respHeader := &Header{}
+	require.NoError(t, respHeader.UnmarshalBinary(rawHeader))
+	reply := &AuthenReply{}
+	require.NoError(t, reply.UnmarshalBinary(Obfuscate(respHeader, secret, rawBody)))
+	return reply
+}
+
+func TestServeConnConcurrentIsolation(t *testing.T) {
+	// Two concurrent ServeConn calls reusing the same client-chosen SessionID
+	// must not share session state: each connection keeps its own localSessions
+	// map, so both independently accept a SeqNo=1 START on that session ID.
+	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
+	secret := []byte("s3cr3t")
+
+	const sessionID = 0xABCD1234
+
+	run := func() error {
+		serverConn, clientConn := net.Pipe()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = server.ServeConn(serverConn)
+		}()
+		defer func() {
+			clientConn.Close()
+			serverConn.Close()
+			<-done
+		}()
+
+		reply := sendPAPStart(t, clientConn, secret, sessionID, "testuser", "password")
+		if reply.Status != AuthenStatusPass {
+			return errors.New("unexpected status")
+		}
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 4)
+	for i := range errs {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = run()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoErrorf(t, err, "concurrent connection %d", i)
+	}
+}
+
+// errorOnceListener returns a real (non-shutdown) error from Accept once its
+// gate is released, then blocks any further Accept. It never yields a
+// connection, so Serve reaches its accept-error path.
+type errorOnceListener struct {
+	entered chan struct{}
+	release chan struct{}
+	first   bool
+}
+
+func (l *errorOnceListener) Accept() (net.Conn, error) {
+	if l.first {
+		<-make(chan struct{})
+	}
+	l.first = true
+	close(l.entered)
+	<-l.release
+	return nil, errors.New("simulated accept error")
+}
+
+func (l *errorOnceListener) Close() error { return nil }
+
+func (l *errorOnceListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+}
+
+// TestServeShutdownAcceptErrorConcurrent runs Serve's accept-error path
+// concurrently with Shutdown many times. Serve's finalize block and Shutdown
+// can both attempt to close the same shutdown channel; the !s.shuttingDown guard
+// must prevent a double close. Under the race detector, any surviving double
+// close would panic. Serve is guaranteed to return (the listener error unblocks
+// it), so the test cannot hang.
+func TestServeShutdownAcceptErrorConcurrent(t *testing.T) {
+	for iter := 0; iter < 300; iter++ {
+		ln := &errorOnceListener{entered: make(chan struct{}), release: make(chan struct{})}
+		srv := NewServer(WithServerListener(ln), WithHandler(&testHandler{}), WithServerSecret("s"))
+
+		serveDone := make(chan error, 1)
+		go func() { serveDone <- srv.Serve() }()
+
+		<-ln.entered // lifecycle initialized; Serve parked in Accept
+
+		// Release the accept error and call Shutdown as close together as
+		// possible so the two finalize paths race.
+		start := make(chan struct{})
+		go func() {
+			<-start
+			close(ln.release)
+		}()
+		go func() {
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_ = srv.Shutdown(ctx)
+			cancel()
+		}()
+		close(start)
+
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Serve did not return")
+		}
+	}
 }

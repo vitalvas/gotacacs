@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -378,7 +379,10 @@ type Server struct {
 	handler        Handler
 
 	running        bool
+	serving        bool
+	shuttingDown   bool
 	shutdownCh     chan struct{}
+	shutdownDone   chan struct{}
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	wg             sync.WaitGroup
@@ -431,31 +435,121 @@ func (s *Server) Serve() error {
 	}
 
 	s.mu.Lock()
-	if s.running {
+	if s.serving {
 		s.mu.Unlock()
 		return errors.New("server already running")
 	}
-	s.running = true
-	s.shutdownCh = make(chan struct{})
-	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
+	if s.shuttingDown {
+		s.mu.Unlock()
+		return net.ErrClosed
+	}
+	if !s.running {
+		s.running = true
+		s.shutdownCh = make(chan struct{})
+		s.shutdownDone = make(chan struct{})
+		s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
+	}
+	s.serving = true
+	shutdownCh := s.shutdownCh
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.serving = false
+		s.mu.Unlock()
+	}()
 
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			select {
-			case <-s.shutdownCh:
+			case <-shutdownCh:
 				return nil
 			default:
 				s.mu.Lock()
-				s.running = false
+				var shutdownDone chan struct{}
+				// Guard on shuttingDown as well as channel identity: a
+				// concurrent Shutdown may have already closed this channel
+				// while it is still the current one (finishShutdown only
+				// clears s.shutdownCh after wg.Wait drains). Without this
+				// check, Serve would close(shutdownCh) a second time.
+				if s.shutdownCh == shutdownCh && !s.shuttingDown {
+					s.running = false
+					s.shuttingDown = true
+					shutdownDone = s.shutdownDone
+					close(shutdownCh)
+					s.shutdownCancel()
+				}
 				s.mu.Unlock()
+				if shutdownDone != nil {
+					s.closeActiveConnections()
+					go s.completeShutdown(shutdownCh, shutdownDone)
+				}
 				return fmt.Errorf("accept error: %w", err)
 			}
 		}
 
+		s.mu.Lock()
+		if s.shuttingDown || !s.running {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return nil
+		}
 		s.wg.Add(1)
-		go s.handleConnection(conn)
+		connShutdownCtx, connShutdownCh := s.shutdownCtx, s.shutdownCh
+		s.mu.Unlock()
+		go s.handleConnection(connShutdownCtx, conn, connShutdownCh)
+	}
+}
+
+// ServeConn runs the full TACACS+ handling loop on a caller-supplied
+// connection. It shares the same code path as the listener-driven Serve, so
+// every hook, timeout, secret-rotation, and session-isolation behavior applies
+// identically. The connection identity (device address) is taken from
+// conn.RemoteAddr(); supply an adapter whose RemoteAddr reports the real NAS
+// address when relaying.
+//
+// ServeConn does not require Serve to have been called: it lazily initializes
+// the shutdown machinery so it works with no listener. Shutdown cancels
+// in-flight ServeConn connections. The call blocks until the connection ends
+// and returns the terminating error, or nil on a clean close.
+func (s *Server) ServeConn(conn net.Conn) error {
+	if isNilConn(conn) {
+		return errors.New("nil connection")
+	}
+
+	s.mu.Lock()
+	if s.shuttingDown {
+		s.mu.Unlock()
+		return net.ErrClosed
+	}
+	if !s.running {
+		s.shutdownCh = make(chan struct{})
+		s.shutdownDone = make(chan struct{})
+		s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
+		s.running = true
+	}
+	// Add while holding the lifecycle mutex. Shutdown takes the same mutex
+	// before starting Wait, so a positive Add can never race a Wait that saw a
+	// zero counter.
+	s.wg.Add(1)
+	shutdownCtx, shutdownCh := s.shutdownCtx, s.shutdownCh
+	s.mu.Unlock()
+	defer s.wg.Done()
+
+	return s.serveConn(shutdownCtx, conn, shutdownCh)
+}
+
+func isNilConn(conn net.Conn) bool {
+	if conn == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(conn)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -465,39 +559,75 @@ func (s *Server) Serve() error {
 // active connections are forcibly closed.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
+	if s.shuttingDown {
+		shutdownDone := s.shutdownDone
+		s.mu.Unlock()
+		return s.waitForShutdown(ctx, shutdownDone)
+	}
 	if !s.running {
 		s.mu.Unlock()
 		return nil
 	}
 	s.running = false
+	s.shuttingDown = true
 	shutdownCancel := s.shutdownCancel
-	s.mu.Unlock()
-
-	close(s.shutdownCh)
+	shutdownCh := s.shutdownCh
+	shutdownDone := s.shutdownDone
+	close(shutdownCh)
 	shutdownCancel()
+	s.mu.Unlock()
 
 	if s.listener != nil {
 		s.listener.Close()
 	}
 
-	// Wait for connections to finish or context to expire
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
+	// A single waiter owns lifecycle cleanup. All concurrent or repeated
+	// Shutdown calls wait on the same completion channel.
+	go s.completeShutdown(shutdownCh, shutdownDone)
 
+	return s.waitForShutdown(ctx, shutdownDone)
+}
+
+// waitForShutdown waits for the current lifecycle to finish. When the caller's
+// context expires, closing active connections unblocks pending network I/O;
+// handlers that ignore cancellation may continue until a later Shutdown wait.
+func (s *Server) waitForShutdown(ctx context.Context, shutdownDone <-chan struct{}) error {
 	select {
-	case <-done:
+	case <-shutdownDone:
 		return nil
 	case <-ctx.Done():
 		// Forcibly close all active connections to unblock pending I/O
-		s.activeConns.Range(func(_, value any) bool {
-			value.(net.Conn).Close()
-			return true
-		})
+		s.closeActiveConnections()
 		return ctx.Err()
 	}
+}
+
+func (s *Server) closeActiveConnections() {
+	s.activeConns.Range(func(_, value any) bool {
+		_ = value.(net.Conn).Close()
+		return true
+	})
+}
+
+func (s *Server) completeShutdown(shutdownCh, shutdownDone chan struct{}) {
+	s.wg.Wait()
+	s.finishShutdown(shutdownCh)
+	close(shutdownDone)
+}
+
+// finishShutdown makes the server available for a fresh ServeConn lifecycle
+// once every handler from the previous lifecycle has exited.
+func (s *Server) finishShutdown(shutdownCh chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.shutdownCh != shutdownCh {
+		return
+	}
+	s.shuttingDown = false
+	s.shutdownCh = nil
+	s.shutdownDone = nil
+	s.shutdownCtx = nil
+	s.shutdownCancel = nil
 }
 
 // IsRunning returns true if the server is currently running.
@@ -689,15 +819,27 @@ func (s *Server) sendKickedResponse(conn net.Conn, header *Header, secret []byte
 	s.writePacket(conn, respHeader, respBody, secret, isTLS)
 }
 
-func (s *Server) handleConnection(conn net.Conn) {
+// handleConnection is the listener-driven entry point. The wait group counter
+// is added by Serve before this goroutine starts, so it only releases it here
+// and delegates the per-connection work to serveConn. The terminating error is
+// intentionally discarded because Serve has no caller to return it to.
+func (s *Server) handleConnection(shutdownCtx context.Context, conn net.Conn, shutdownCh <-chan struct{}) {
 	defer s.wg.Done()
+	_ = s.serveConn(shutdownCtx, conn, shutdownCh)
+}
+
+// serveConn runs the full per-connection TACACS+ handling loop on conn. It is
+// shared by the listener-driven handleConnection and the caller-supplied
+// ServeConn entry points, so both follow an identical code path. It blocks
+// until the connection ends and returns the terminating error, or nil on a
+// clean close. Callers are responsible for the wait group counter.
+func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan struct{}) error {
 	defer conn.Close()
 
 	connID := s.nextConnID.Add(1)
 	s.activeConns.Store(connID, conn)
 	defer s.activeConns.Delete(connID)
 
-	ctx := s.shutdownCtx
 	secretReq := SecretRequest{
 		RemoteAddr: conn.RemoteAddr(),
 		LocalAddr:  conn.LocalAddr(),
@@ -708,7 +850,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if isTLS {
 		tlsState, err := s.completeTLSHandshake(ctx, conn)
 		if err != nil {
-			return
+			return err
 		}
 		secretReq.TLSState = tlsState
 	}
@@ -739,8 +881,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	for {
 		select {
-		case <-s.shutdownCh:
-			return
+		case <-shutdownCh:
+			return nil
 		default:
 		}
 
@@ -757,14 +899,20 @@ func (s *Server) handleConnection(conn net.Conn) {
 			header, body, err = s.readPacket(conn, cs.secret, cs.isTLS)
 			if err != nil {
 				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
-				return
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
 			}
 		} else {
 			var err error
 			header, body, err = s.readRawPacket(conn, len(cs.secret) > 0, cs.isTLS)
 			if err != nil {
 				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
-				return
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
 			}
 			body = s.resolveSecret(ctx, header, body, cs)
 			secretResolved = true
@@ -783,14 +931,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.sendKickedResponse(conn, header, cs.secret, cs.isTLS)
 			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
 			if header.Flags&FlagSingleConnect == 0 {
-				return
+				return nil
 			}
 			continue
 		}
 
 		// Validate and update sequence number
 		if !session.ValidateSeqNo(header.SeqNo) {
-			return
+			return ErrInvalidSequence
 		}
 		session.UpdateSeqNo(header.SeqNo)
 
@@ -814,11 +962,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 		case PacketTypeAcct:
 			respBody, respType, sessionState = s.handleAcctPacket(ctx, header, body, cs)
 		default:
-			return
+			return fmt.Errorf("%w: unsupported packet type %d", ErrInvalidType, header.Type)
 		}
 
 		if respBody == nil {
-			return
+			return nil
 		}
 
 		// Set session state based on response (Complete for success, Error for failures)
@@ -833,7 +981,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			session.SetState(SessionStateError)
 			s.updateTrackedState(trackingIDs, header.SessionID, SessionStateError)
 			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
-			return
+			return err
 		}
 
 		// Build response header.
@@ -855,7 +1003,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 
 		if err := s.writePacket(conn, respHeader, respBody, cs.secret, cs.isTLS); err != nil {
-			return
+			return err
 		}
 
 		// Clean up completed sessions to prevent unbounded growth in single-connect mode
@@ -864,7 +1012,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 			// Close connection if not single-connect mode
 			if header.Flags&FlagSingleConnect == 0 {
-				return
+				return nil
 			}
 		}
 	}
