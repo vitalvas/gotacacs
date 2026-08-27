@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/vitalvas/gotacacs/compare/v0.4.0...v0.5.0) (2026-08-27)
+
+
+### Features
+
+* add ServeConn for caller-supplied connections ([8cb867c](https://github.com/vitalvas/gotacacs/commit/8cb867c1abcd2215947883ddb6d4819a8dff9e21))
+
 ## [0.4.0](https://github.com/vitalvas/gotacacs/compare/v0.3.0...v0.4.0) (2026-05-23)
 
 
