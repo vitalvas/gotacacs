@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vitalvas/gotacacs"
+	"go.vitalvas.com/gotacacs"
 )
 
 func main() {

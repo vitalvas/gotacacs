@@ -9,7 +9,7 @@ Create a client using `NewClient` with functional options:
 ```go
 import (
     "time"
-    "github.com/vitalvas/gotacacs"
+    "go.vitalvas.com/gotacacs"
 )
 
 client := gotacacs.NewClient(

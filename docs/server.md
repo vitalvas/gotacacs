@@ -9,7 +9,7 @@ Create a server using `NewServer` with functional options:
 ```go
 import (
     "log"
-    "github.com/vitalvas/gotacacs"
+    "go.vitalvas.com/gotacacs"
 )
 
 ln, err := gotacacs.ListenTCP(":49")

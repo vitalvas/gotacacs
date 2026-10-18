@@ -24,7 +24,7 @@ Provides both client and server SDK interfaces for Authentication, Authorization
 ## Installation
 
 ```bash
-go get github.com/vitalvas/gotacacs
+go get go.vitalvas.com/gotacacs
 ```
 
 ## Quick Start
