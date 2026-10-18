@@ -7,19 +7,19 @@ import (
 // AcctRequest represents a TACACS+ accounting REQUEST packet as defined in RFC8907 Section 7.1.
 // This packet is sent by the client to send accounting records to the server.
 type AcctRequest struct {
-	Flags        uint8    // Accounting flags (START, STOP, WATCHDOG)
-	AuthenMethod uint8    // Authentication method used
-	PrivLevel    uint8    // Privilege level
-	AuthenType   uint8    // Authentication type
-	Service      uint8    // Authentication service
-	User         []byte   // Username
-	Port         []byte   // Port identifier
-	RemoteAddr   []byte   // Remote address
-	RawArgs      [][]byte // Accounting arguments
+	Flags        AcctFlag      // Accounting flags (START, STOP, WATCHDOG)
+	AuthenMethod AuthenMethod  // Authentication method used
+	PrivLevel    uint8         // Privilege level
+	AuthenType   AuthenType    // Authentication type
+	Service      AuthenService // Authentication service
+	User         []byte        // Username
+	Port         []byte        // Port identifier
+	RemoteAddr   []byte        // Remote address
+	RawArgs      [][]byte      // Accounting arguments
 }
 
 // NewAcctRequest creates a new AcctRequest packet with the specified parameters.
-func NewAcctRequest(flags, authenMethod, authenType, service uint8, user string) *AcctRequest {
+func NewAcctRequest(flags AcctFlag, authenMethod AuthenMethod, authenType AuthenType, service AuthenService, user string) *AcctRequest {
 	return &AcctRequest{
 		Flags:        flags,
 		AuthenMethod: authenMethod,
@@ -91,11 +91,11 @@ func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 	size := 9 + argCount + userLen + portLen + remAddrLen + totalArgsLen
 	buf := make([]byte, size)
 
-	buf[0] = p.Flags
-	buf[1] = p.AuthenMethod
+	buf[0] = byte(p.Flags)
+	buf[1] = byte(p.AuthenMethod)
 	buf[2] = p.PrivLevel
-	buf[3] = p.AuthenType
-	buf[4] = p.Service
+	buf[3] = byte(p.AuthenType)
+	buf[4] = byte(p.Service)
 	buf[5] = uint8(userLen)
 	buf[6] = uint8(portLen)
 	buf[7] = uint8(remAddrLen)
@@ -132,11 +132,11 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need at least 9 bytes, got %d", ErrBufferTooShort, len(data))
 	}
 
-	p.Flags = data[0]
-	p.AuthenMethod = data[1]
+	p.Flags = AcctFlag(data[0])
+	p.AuthenMethod = AuthenMethod(data[1])
 	p.PrivLevel = data[2]
-	p.AuthenType = data[3]
-	p.Service = data[4]
+	p.AuthenType = AuthenType(data[3])
+	p.Service = AuthenService(data[4])
 
 	userLen := int(data[5])
 	portLen := int(data[6])
@@ -220,9 +220,9 @@ func (p *AcctRequest) UnmarshalBinary(data []byte) error {
 // AcctReply represents a TACACS+ accounting REPLY packet as defined in RFC8907 Section 7.2.
 // This packet is sent by the server in response to an accounting request.
 type AcctReply struct {
-	Status    uint8  // Accounting status
-	ServerMsg []byte // Server message (optional)
-	Data      []byte // Additional data (optional)
+	Status    AcctStatus // Accounting status
+	ServerMsg []byte     // Server message (optional)
+	Data      []byte     // Additional data (optional)
 }
 
 // MarshalBinary encodes the AcctReply packet to binary format.
@@ -242,7 +242,7 @@ func (p *AcctReply) MarshalBinary() ([]byte, error) {
 	buf[1] = uint8(serverMsgLen)
 	buf[2] = uint8(dataLen >> 8)
 	buf[3] = uint8(dataLen)
-	buf[4] = p.Status
+	buf[4] = byte(p.Status)
 
 	offset := 5
 	copy(buf[offset:], p.ServerMsg)
@@ -260,7 +260,7 @@ func (p *AcctReply) UnmarshalBinary(data []byte) error {
 
 	serverMsgLen := int(data[0])<<8 | int(data[1])
 	dataLen := int(data[2])<<8 | int(data[3])
-	p.Status = data[4]
+	p.Status = AcctStatus(data[4])
 
 	expectedLen := 5 + serverMsgLen + dataLen
 	if len(data) < expectedLen {

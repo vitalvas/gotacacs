@@ -9,21 +9,21 @@ import (
 
 func TestNewAcctRequest(t *testing.T) {
 	t.Run("start request", func(t *testing.T) {
-		p := NewAcctRequest(AcctFlagStart, AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "testuser")
-		if p.Flags != uint8(AcctFlagStart) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(AcctFlagStart))
+		p := NewAcctRequest(AcctFlagStart, AuthenMethod(AuthenTypePAP), AuthenTypeASCII, AuthenServiceLogin, "testuser")
+		if p.Flags != AcctFlagStart {
+			t.Errorf("got %v, want %v", p.Flags, AcctFlagStart)
 		}
-		if p.AuthenMethod != uint8(AuthenTypePAP) {
-			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(AuthenTypePAP))
+		if p.AuthenMethod != AuthenMethod(AuthenTypePAP) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, AuthenMethod(AuthenTypePAP))
 		}
 		if p.PrivLevel != uint8(1) {
 			t.Errorf("got %v, want %v", p.PrivLevel, uint8(1))
 		}
-		if p.AuthenType != uint8(AuthenTypeASCII) {
-			t.Errorf("got %v, want %v", p.AuthenType, uint8(AuthenTypeASCII))
+		if p.AuthenType != AuthenTypeASCII {
+			t.Errorf("got %v, want %v", p.AuthenType, AuthenTypeASCII)
 		}
-		if p.Service != uint8(AuthenServiceLogin) {
-			t.Errorf("got %v, want %v", p.Service, uint8(AuthenServiceLogin))
+		if p.Service != AuthenServiceLogin {
+			t.Errorf("got %v, want %v", p.Service, AuthenServiceLogin)
 		}
 		if !bytes.Equal(p.User, []byte("testuser")) {
 			t.Errorf("got %v, want %v", p.User, []byte("testuser"))
@@ -31,16 +31,16 @@ func TestNewAcctRequest(t *testing.T) {
 	})
 
 	t.Run("stop request", func(t *testing.T) {
-		p := NewAcctRequest(AcctFlagStop, AuthenTypeCHAP, AuthenTypePAP, AuthenServiceEnable, "admin")
-		if p.Flags != uint8(AcctFlagStop) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(AcctFlagStop))
+		p := NewAcctRequest(AcctFlagStop, AuthenMethod(AuthenTypeCHAP), AuthenTypePAP, AuthenServiceEnable, "admin")
+		if p.Flags != AcctFlagStop {
+			t.Errorf("got %v, want %v", p.Flags, AcctFlagStop)
 		}
 	})
 
 	t.Run("watchdog request", func(t *testing.T) {
-		p := NewAcctRequest(AcctFlagWatchdog, AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "user")
-		if p.Flags != uint8(AcctFlagWatchdog) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(AcctFlagWatchdog))
+		p := NewAcctRequest(AcctFlagWatchdog, AuthenMethod(AuthenTypePAP), AuthenTypeASCII, AuthenServiceLogin, "user")
+		if p.Flags != AcctFlagWatchdog {
+			t.Errorf("got %v, want %v", p.Flags, AcctFlagWatchdog)
 		}
 	})
 }
@@ -138,7 +138,7 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 	t.Run("accounting start packet encoding", func(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStart,
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -150,7 +150,7 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 		}
 
 		// Verify 9-byte fixed header for accounting request
-		expected := []byte{AcctFlagStart, AuthenTypePAP, 1, AuthenTypeASCII, AuthenServiceLogin, 0, 0, 0, 0}
+		expected := []byte{byte(AcctFlagStart), byte(AuthenTypePAP), 1, byte(AuthenTypeASCII), byte(AuthenServiceLogin), 0, 0, 0, 0}
 		if !bytes.Equal(data, expected) {
 			t.Errorf("got %v, want %v", data, expected)
 		}
@@ -159,7 +159,7 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 	t.Run("with all fields and accounting args", func(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStop,
-			AuthenMethod: AuthenTypeCHAP,
+			AuthenMethod: AuthenMethod(AuthenTypeCHAP),
 			PrivLevel:    15,
 			AuthenType:   AuthenTypePAP,
 			Service:      AuthenServicePPP,
@@ -234,7 +234,7 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 
 func TestAcctRequestUnmarshalBinary(t *testing.T) {
 	t.Run("minimal accounting packet", func(t *testing.T) {
-		data := []byte{AcctFlagStart, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00}
+		data := []byte{byte(AcctFlagStart), 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00}
 
 		p := &AcctRequest{}
 		err := p.UnmarshalBinary(data)
@@ -242,11 +242,11 @@ func TestAcctRequestUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.Flags != uint8(AcctFlagStart) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(AcctFlagStart))
+		if p.Flags != AcctFlagStart {
+			t.Errorf("got %v, want %v", p.Flags, AcctFlagStart)
 		}
-		if p.AuthenMethod != uint8(0x02) {
-			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(0x02))
+		if p.AuthenMethod != AuthenMethod(0x02) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, AuthenMethod(0x02))
 		}
 		if p.User != nil {
 			t.Errorf("expected nil, got %v", p.User)
@@ -305,7 +305,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "start record",
 			packet: &AcctRequest{
 				Flags:        AcctFlagStart,
-				AuthenMethod: AuthenTypePAP,
+				AuthenMethod: AuthenMethod(AuthenTypePAP),
 				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
@@ -315,7 +315,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "stop record with user",
 			packet: &AcctRequest{
 				Flags:        AcctFlagStop,
-				AuthenMethod: AuthenTypePAP,
+				AuthenMethod: AuthenMethod(AuthenTypePAP),
 				PrivLevel:    15,
 				AuthenType:   AuthenTypePAP,
 				Service:      AuthenServiceEnable,
@@ -326,7 +326,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "watchdog with args",
 			packet: &AcctRequest{
 				Flags:        AcctFlagWatchdog,
-				AuthenMethod: AuthenTypeCHAP,
+				AuthenMethod: AuthenMethod(AuthenTypeCHAP),
 				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
@@ -338,7 +338,7 @@ func TestAcctRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "all fields populated",
 			packet: &AcctRequest{
 				Flags:        AcctFlagStop | AcctFlagWatchdog,
-				AuthenMethod: AuthenTypeMSCHAP,
+				AuthenMethod: AuthenMethod(AuthenTypeMSCHAP),
 				PrivLevel:    0,
 				AuthenType:   AuthenTypeCHAP,
 				Service:      AuthenServicePPP,
@@ -413,7 +413,7 @@ func TestAcctReplyMarshalBinary(t *testing.T) {
 		}
 
 		// 5-byte fixed header: server_msg_len (2) + data_len (2) + status (1)
-		expected := []byte{0, 0, 0, 0, AcctStatusSuccess}
+		expected := []byte{0, 0, 0, 0, byte(AcctStatusSuccess)}
 		if !bytes.Equal(data, expected) {
 			t.Errorf("got %v, want %v", data, expected)
 		}
@@ -482,7 +482,7 @@ func TestAcctReplyMarshalBinary(t *testing.T) {
 
 func TestAcctReplyUnmarshalBinary(t *testing.T) {
 	t.Run("minimal reply", func(t *testing.T) {
-		data := []byte{0x00, 0x00, 0x00, 0x00, AcctStatusSuccess}
+		data := []byte{0x00, 0x00, 0x00, 0x00, byte(AcctStatusSuccess)}
 
 		p := &AcctReply{}
 		err := p.UnmarshalBinary(data)
@@ -490,8 +490,8 @@ func TestAcctReplyUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.Status != uint8(AcctStatusSuccess) {
-			t.Errorf("got %v, want %v", p.Status, uint8(AcctStatusSuccess))
+		if p.Status != AcctStatusSuccess {
+			t.Errorf("got %v, want %v", p.Status, AcctStatusSuccess)
 		}
 		if p.ServerMsg != nil {
 			t.Errorf("expected nil, got %v", p.ServerMsg)
@@ -515,7 +515,7 @@ func TestAcctReplyUnmarshalBinary(t *testing.T) {
 	})
 
 	t.Run("buffer too short for server message", func(t *testing.T) {
-		data := []byte{0x00, 0x10, 0x00, 0x00, AcctStatusSuccess}
+		data := []byte{0x00, 0x10, 0x00, 0x00, byte(AcctStatusSuccess)}
 
 		p := &AcctReply{}
 		err := p.UnmarshalBinary(data)
@@ -616,7 +616,7 @@ func TestAcctRequestEmptyArgs(t *testing.T) {
 	t.Run("zero length accounting arg", func(t *testing.T) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStart,
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -729,7 +729,7 @@ func TestAcctBadSecretDetection(t *testing.T) {
 func BenchmarkAcctRequestMarshalBinary(b *testing.B) {
 	pkt := &AcctRequest{
 		Flags:        AcctFlagStart,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    15,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -751,7 +751,7 @@ func BenchmarkAcctRequestMarshalBinary(b *testing.B) {
 func BenchmarkAcctRequestUnmarshalBinary(b *testing.B) {
 	pkt := &AcctRequest{
 		Flags:        AcctFlagStart,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    15,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -805,7 +805,7 @@ func BenchmarkAcctReplyUnmarshalBinary(b *testing.B) {
 func FuzzAcctRequestUnmarshalBinary(f *testing.F) {
 	validPkt := &AcctRequest{
 		Flags:        AcctFlagStart,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    15,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -818,7 +818,7 @@ func FuzzAcctRequestUnmarshalBinary(f *testing.F) {
 		f.Add(data)
 	}
 
-	minPkt := &AcctRequest{Flags: AcctFlagStop, AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
+	minPkt := &AcctRequest{Flags: AcctFlagStop, AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
 	if data, err := minPkt.MarshalBinary(); err == nil {
 		f.Add(data)
 	}

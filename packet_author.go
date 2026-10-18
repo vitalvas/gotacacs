@@ -7,18 +7,18 @@ import (
 // AuthorRequest represents a TACACS+ authorization REQUEST packet as defined in RFC8907 Section 6.1.
 // This packet is sent by the client to request authorization for a specific action.
 type AuthorRequest struct {
-	AuthenMethod uint8    // Authentication method used
-	PrivLevel    uint8    // Privilege level
-	AuthenType   uint8    // Authentication type
-	Service      uint8    // Authentication service
-	User         []byte   // Username
-	Port         []byte   // Port identifier
-	RemoteAddr   []byte   // Remote address
-	RawArgs      [][]byte // Authorization arguments
+	AuthenMethod AuthenMethod  // Authentication method used
+	PrivLevel    uint8         // Privilege level
+	AuthenType   AuthenType    // Authentication type
+	Service      AuthenService // Authentication service
+	User         []byte        // Username
+	Port         []byte        // Port identifier
+	RemoteAddr   []byte        // Remote address
+	RawArgs      [][]byte      // Authorization arguments
 }
 
 // NewAuthorRequest creates a new AuthorRequest packet with the specified parameters.
-func NewAuthorRequest(authenMethod, authenType, service uint8, user string) *AuthorRequest {
+func NewAuthorRequest(authenMethod AuthenMethod, authenType AuthenType, service AuthenService, user string) *AuthorRequest {
 	return &AuthorRequest{
 		AuthenMethod: authenMethod,
 		PrivLevel:    1, // Default privilege level
@@ -74,10 +74,10 @@ func (p *AuthorRequest) MarshalBinary() ([]byte, error) {
 	size := 8 + argCount + userLen + portLen + remAddrLen + totalArgsLen
 	buf := make([]byte, size)
 
-	buf[0] = p.AuthenMethod
+	buf[0] = byte(p.AuthenMethod)
 	buf[1] = p.PrivLevel
-	buf[2] = p.AuthenType
-	buf[3] = p.Service
+	buf[2] = byte(p.AuthenType)
+	buf[3] = byte(p.Service)
 	buf[4] = uint8(userLen)
 	buf[5] = uint8(portLen)
 	buf[6] = uint8(remAddrLen)
@@ -114,10 +114,10 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need at least 8 bytes, got %d", ErrBufferTooShort, len(data))
 	}
 
-	p.AuthenMethod = data[0]
+	p.AuthenMethod = AuthenMethod(data[0])
 	p.PrivLevel = data[1]
-	p.AuthenType = data[2]
-	p.Service = data[3]
+	p.AuthenType = AuthenType(data[2])
+	p.Service = AuthenService(data[3])
 
 	userLen := int(data[4])
 	portLen := int(data[5])
@@ -201,10 +201,10 @@ func (p *AuthorRequest) UnmarshalBinary(data []byte) error {
 // AuthorResponse represents a TACACS+ authorization RESPONSE packet as defined in RFC8907 Section 6.2.
 // This packet is sent by the server in response to an authorization request.
 type AuthorResponse struct {
-	Status    uint8    // Authorization status
-	RawArgs   [][]byte // Authorization arguments (may be modified from request)
-	ServerMsg []byte   // Server message (optional)
-	Data      []byte   // Additional data (optional)
+	Status    AuthorStatus // Authorization status
+	RawArgs   [][]byte     // Authorization arguments (may be modified from request)
+	ServerMsg []byte       // Server message (optional)
+	Data      []byte       // Additional data (optional)
 }
 
 // AddArg adds an argument to the authorization response.
@@ -252,7 +252,7 @@ func (p *AuthorResponse) MarshalBinary() ([]byte, error) {
 	size := 6 + argCount + serverMsgLen + dataLen + totalArgsLen
 	buf := make([]byte, size)
 
-	buf[0] = p.Status
+	buf[0] = byte(p.Status)
 	buf[1] = uint8(argCount)
 	buf[2] = uint8(serverMsgLen >> 8)
 	buf[3] = uint8(serverMsgLen)
@@ -288,7 +288,7 @@ func (p *AuthorResponse) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need at least 6 bytes, got %d", ErrBufferTooShort, len(data))
 	}
 
-	p.Status = data[0]
+	p.Status = AuthorStatus(data[0])
 	argCount := int(data[1])
 	serverMsgLen := int(data[2])<<8 | int(data[3])
 	dataLen := int(data[4])<<8 | int(data[5])

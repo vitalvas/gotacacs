@@ -247,7 +247,7 @@ func TestGeneratePseudoPad(t *testing.T) {
 		h := md5.New()
 		h.Write(sessionIDBytes)
 		h.Write(secret)
-		h.Write([]byte{header.Version})
+		h.Write([]byte{byte(header.Version)})
 		h.Write([]byte{header.SeqNo})
 		expectedFirstBlock := h.Sum(nil)
 
@@ -294,7 +294,7 @@ func TestGeneratePseudoPad(t *testing.T) {
 		h1 := md5.New()
 		h1.Write(sessionIDBytes)
 		h1.Write(secret)
-		h1.Write([]byte{header.Version})
+		h1.Write([]byte{byte(header.Version)})
 		h1.Write([]byte{header.SeqNo})
 		firstBlock := h1.Sum(nil)
 
@@ -302,7 +302,7 @@ func TestGeneratePseudoPad(t *testing.T) {
 		h2 := md5.New()
 		h2.Write(sessionIDBytes)
 		h2.Write(secret)
-		h2.Write([]byte{header.Version})
+		h2.Write([]byte{byte(header.Version)})
 		h2.Write([]byte{header.SeqNo})
 		h2.Write(firstBlock)
 		secondBlock := h2.Sum(nil)
@@ -481,17 +481,17 @@ func TestTacquitoInteroperability(t *testing.T) {
 	}
 
 	// Verify header values
-	if header.Version != uint8(0xc1) {
-		t.Errorf("got %v, want %v", header.Version, uint8(0xc1))
+	if header.Version != 0xc1 {
+		t.Errorf("got %v, want %v", byte(header.Version), Version(0xc1))
 	}
-	if header.Type != uint8(PacketTypeAuthen) {
-		t.Errorf("got %v, want %v", header.Type, uint8(PacketTypeAuthen))
+	if header.Type != PacketTypeAuthen {
+		t.Errorf("got %v, want %v", header.Type, PacketTypeAuthen)
 	}
 	if header.SeqNo != uint8(1) {
 		t.Errorf("got %v, want %v", header.SeqNo, uint8(1))
 	}
-	if header.Flags != uint8(0) {
-		t.Errorf("got %v, want %v", header.Flags, uint8(0))
+	if header.Flags != 0 {
+		t.Errorf("got %v, want %v", header.Flags, HeaderFlag(0))
 	}
 	if header.SessionID != uint32(12345) { // 0x3039 = 12345
 		t.Errorf("got %v, want %v", header.SessionID, uint32(12345))
@@ -535,17 +535,17 @@ func TestTacquitoInteroperability(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if start.Action != uint8(AuthenActionLogin) {
-			t.Errorf("got %v, want %v", start.Action, uint8(AuthenActionLogin))
+		if start.Action != AuthenActionLogin {
+			t.Errorf("got %v, want %v", start.Action, AuthenActionLogin)
 		}
 		if start.PrivLevel != uint8(1) { // PrivLvlUser
 			t.Errorf("got %v, want %v", start.PrivLevel, uint8(1))
 		}
-		if start.AuthenType != uint8(AuthenTypeASCII) {
-			t.Errorf("got %v, want %v", start.AuthenType, uint8(AuthenTypeASCII))
+		if start.AuthenType != AuthenTypeASCII {
+			t.Errorf("got %v, want %v", start.AuthenType, AuthenTypeASCII)
 		}
-		if start.Service != uint8(AuthenServiceLogin) {
-			t.Errorf("got %v, want %v", start.Service, uint8(AuthenServiceLogin))
+		if start.Service != AuthenServiceLogin {
+			t.Errorf("got %v, want %v", start.Service, AuthenServiceLogin)
 		}
 		if string(start.User) != "admin" {
 			t.Errorf("got %v, want %v", string(start.User), "admin")
@@ -734,7 +734,7 @@ func FuzzObfuscateRoundtrip(f *testing.F) {
 		}
 
 		header := &Header{
-			Version:   version,
+			Version:   Version(version),
 			SeqNo:     seqNo,
 			SessionID: sessionID,
 		}

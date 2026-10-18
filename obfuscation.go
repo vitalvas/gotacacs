@@ -50,7 +50,7 @@ func generatePseudoPad(header *Header, secret []byte, length int) []byte {
 	input := make([]byte, baseLen+md5.Size)
 	binary.BigEndian.PutUint32(input[0:4], header.SessionID)
 	copy(input[4:], secret)
-	input[4+len(secret)] = header.Version
+	input[4+len(secret)] = byte(header.Version)
 	input[4+len(secret)+1] = header.SeqNo
 
 	// Generate pseudo-pad blocks using md5.Sum (returns [16]byte, no allocation)

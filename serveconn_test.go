@@ -124,7 +124,7 @@ func TestReadRawPacketRejects(t *testing.T) {
 		// Valid length header with an invalid version so Validate rejects it.
 		headerBuf := make([]byte, HeaderLength)
 		headerBuf[0] = 0x00 // invalid version
-		headerBuf[1] = PacketTypeAuthen
+		headerBuf[1] = byte(PacketTypeAuthen)
 		headerBuf[2] = 1
 
 		serverConn, clientConn := net.Pipe()
@@ -169,7 +169,7 @@ func TestWriteRawPacketRejectsInvalidFraming(t *testing.T) {
 
 	t.Run("invalid header", func(t *testing.T) {
 		header := make([]byte, HeaderLength)
-		header[1] = PacketTypeAuthen
+		header[1] = byte(PacketTypeAuthen)
 		header[2] = 1
 		var dst bytes.Buffer
 		err := WriteRawPacket(&dst, header, nil)

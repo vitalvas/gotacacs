@@ -1,211 +1,250 @@
 package gotacacs
 
+// Version is the TACACS+ protocol version byte (major nibble << 4 | minor nibble).
+type Version uint8
+
 // TACACS+ protocol version constants as defined in RFC8907.
 const (
 	// MajorVersion is the TACACS+ major version (0x0c).
-	MajorVersion = 0x0c
+	MajorVersion Version = 0x0c
 
 	// MinorVersionDefault is the default minor version.
-	MinorVersionDefault = 0x00
+	MinorVersionDefault Version = 0x00
 
 	// MinorVersionOne indicates minor version 1.
-	MinorVersionOne = 0x01
+	MinorVersionOne Version = 0x01
 )
+
+// PacketType identifies the kind of TACACS+ packet.
+type PacketType uint8
 
 // Packet type constants as defined in RFC8907 Section 4.1.
 const (
 	// PacketTypeAuthen indicates an authentication packet.
-	PacketTypeAuthen = 0x01
+	PacketTypeAuthen PacketType = 0x01
 
 	// PacketTypeAuthor indicates an authorization packet.
-	PacketTypeAuthor = 0x02
+	PacketTypeAuthor PacketType = 0x02
 
 	// PacketTypeAcct indicates an accounting packet.
-	PacketTypeAcct = 0x03
+	PacketTypeAcct PacketType = 0x03
 )
+
+// HeaderFlag is a TACACS+ header flag bitmask.
+type HeaderFlag uint8
 
 // Header flag constants as defined in RFC8907 Section 4.1.
 const (
 	// FlagUnencrypted indicates the packet body is not obfuscated.
-	FlagUnencrypted = 0x01
+	FlagUnencrypted HeaderFlag = 0x01
 
 	// FlagSingleConnect indicates the client wants to use single-connection mode.
-	FlagSingleConnect = 0x04
+	FlagSingleConnect HeaderFlag = 0x04
 )
+
+// AuthenAction is a TACACS+ authentication action.
+type AuthenAction uint8
 
 // Authentication action types as defined in RFC8907 Section 5.1.
 const (
 	// AuthenActionLogin indicates a login action.
-	AuthenActionLogin = 0x01
+	AuthenActionLogin AuthenAction = 0x01
 
 	// AuthenActionChPass indicates a password change action.
-	AuthenActionChPass = 0x02
+	AuthenActionChPass AuthenAction = 0x02
 
 	// AuthenActionSendAuth indicates a send authentication action.
-	AuthenActionSendAuth = 0x04
+	AuthenActionSendAuth AuthenAction = 0x04
 )
+
+// AuthenType is a TACACS+ authentication type.
+type AuthenType uint8
 
 // Authentication types as defined in RFC8907 Section 5.1.
 const (
 	// AuthenTypeASCII indicates ASCII authentication.
-	AuthenTypeASCII = 0x01
+	AuthenTypeASCII AuthenType = 0x01
 
 	// AuthenTypePAP indicates PAP authentication.
-	AuthenTypePAP = 0x02
+	AuthenTypePAP AuthenType = 0x02
 
 	// AuthenTypeCHAP indicates CHAP authentication.
-	AuthenTypeCHAP = 0x03
+	AuthenTypeCHAP AuthenType = 0x03
 
 	// AuthenTypeMSCHAP indicates MS-CHAP v1 authentication.
-	AuthenTypeMSCHAP = 0x05
+	AuthenTypeMSCHAP AuthenType = 0x05
 
 	// AuthenTypeMSCHAPV2 indicates MS-CHAP v2 authentication.
-	AuthenTypeMSCHAPV2 = 0x06
+	AuthenTypeMSCHAPV2 AuthenType = 0x06
 )
+
+// AuthenService is a TACACS+ authentication service.
+type AuthenService uint8
 
 // Authentication service types as defined in RFC8907 Section 5.1.
 const (
 	// AuthenServiceNone indicates no service.
-	AuthenServiceNone = 0x00
+	AuthenServiceNone AuthenService = 0x00
 
 	// AuthenServiceLogin indicates login service.
-	AuthenServiceLogin = 0x01
+	AuthenServiceLogin AuthenService = 0x01
 
 	// AuthenServiceEnable indicates enable service.
-	AuthenServiceEnable = 0x02
+	AuthenServiceEnable AuthenService = 0x02
 
 	// AuthenServicePPP indicates PPP service.
-	AuthenServicePPP = 0x03
+	AuthenServicePPP AuthenService = 0x03
 
 	// AuthenServicePT indicates PT service.
-	AuthenServicePT = 0x05
+	AuthenServicePT AuthenService = 0x05
 
 	// AuthenServiceRCMD indicates RCMD service.
-	AuthenServiceRCMD = 0x06
+	AuthenServiceRCMD AuthenService = 0x06
 
 	// AuthenServiceX25 indicates X25 service.
-	AuthenServiceX25 = 0x07
+	AuthenServiceX25 AuthenService = 0x07
 
 	// AuthenServiceNASI indicates NASI service.
-	AuthenServiceNASI = 0x08
+	AuthenServiceNASI AuthenService = 0x08
 )
+
+// AuthenStatus is a TACACS+ authentication status code.
+type AuthenStatus uint8
 
 // Authentication status codes as defined in RFC8907 Section 5.2.
 const (
 	// AuthenStatusPass indicates authentication passed.
-	AuthenStatusPass = 0x01
+	AuthenStatusPass AuthenStatus = 0x01
 
 	// AuthenStatusFail indicates authentication failed.
-	AuthenStatusFail = 0x02
+	AuthenStatusFail AuthenStatus = 0x02
 
 	// AuthenStatusGetData indicates server needs more data.
-	AuthenStatusGetData = 0x03
+	AuthenStatusGetData AuthenStatus = 0x03
 
 	// AuthenStatusGetUser indicates server needs the username.
-	AuthenStatusGetUser = 0x04
+	AuthenStatusGetUser AuthenStatus = 0x04
 
 	// AuthenStatusGetPass indicates server needs the password.
-	AuthenStatusGetPass = 0x05
+	AuthenStatusGetPass AuthenStatus = 0x05
 
 	// AuthenStatusRestart indicates authentication should restart.
-	AuthenStatusRestart = 0x06
+	AuthenStatusRestart AuthenStatus = 0x06
 
 	// AuthenStatusError indicates an error occurred.
-	AuthenStatusError = 0x07
+	AuthenStatusError AuthenStatus = 0x07
 
 	// AuthenStatusFollow indicates the client should follow to another server.
-	AuthenStatusFollow = 0x21
+	AuthenStatusFollow AuthenStatus = 0x21
 )
+
+// AuthenReplyFlag is a TACACS+ authentication reply flag bitmask.
+type AuthenReplyFlag uint8
 
 // Authentication reply flags as defined in RFC8907 Section 5.2.
 const (
 	// AuthenReplyFlagNoEcho indicates the server wants no echo of user input.
-	AuthenReplyFlagNoEcho = 0x01
+	AuthenReplyFlagNoEcho AuthenReplyFlag = 0x01
 )
+
+// AuthenContinueFlag is a TACACS+ authentication continue flag bitmask.
+type AuthenContinueFlag uint8
 
 // Authentication continue flags as defined in RFC8907 Section 5.3.
 const (
 	// AuthenContinueFlagAbort indicates the client wants to abort authentication.
-	AuthenContinueFlagAbort = 0x01
+	AuthenContinueFlagAbort AuthenContinueFlag = 0x01
 )
+
+// AuthenMethod is a TACACS+ authentication method.
+type AuthenMethod uint8
 
 // Authentication method constants as defined in RFC8907 Section 6.1.
 // These indicate how the user was authenticated in authorization/accounting requests.
 const (
 	// AuthenMethodNotSet indicates the authentication method was not set.
-	AuthenMethodNotSet = 0x00
+	AuthenMethodNotSet AuthenMethod = 0x00
 
 	// AuthenMethodNone indicates no authentication was performed.
-	AuthenMethodNone = 0x01
+	AuthenMethodNone AuthenMethod = 0x01
 
 	// AuthenMethodKRB5 indicates Kerberos 5 authentication.
-	AuthenMethodKRB5 = 0x02
+	AuthenMethodKRB5 AuthenMethod = 0x02
 
 	// AuthenMethodLine indicates line authentication (e.g., console password).
-	AuthenMethodLine = 0x03
+	AuthenMethodLine AuthenMethod = 0x03
 
 	// AuthenMethodEnable indicates enable authentication.
-	AuthenMethodEnable = 0x04
+	AuthenMethodEnable AuthenMethod = 0x04
 
 	// AuthenMethodLocal indicates local database authentication.
-	AuthenMethodLocal = 0x05
+	AuthenMethodLocal AuthenMethod = 0x05
 
 	// AuthenMethodTACACSPlus indicates TACACS+ authentication.
-	AuthenMethodTACACSPlus = 0x06
+	AuthenMethodTACACSPlus AuthenMethod = 0x06
 
 	// AuthenMethodGuest indicates guest authentication.
-	AuthenMethodGuest = 0x08
+	AuthenMethodGuest AuthenMethod = 0x08
 
 	// AuthenMethodRadius indicates RADIUS authentication.
-	AuthenMethodRadius = 0x10
+	AuthenMethodRadius AuthenMethod = 0x10
 
 	// AuthenMethodKRB4 indicates Kerberos 4 authentication.
-	AuthenMethodKRB4 = 0x11
+	AuthenMethodKRB4 AuthenMethod = 0x11
 
 	// AuthenMethodRCMD indicates RCMD authentication.
-	AuthenMethodRCMD = 0x20
+	AuthenMethodRCMD AuthenMethod = 0x20
 )
+
+// AuthorStatus is a TACACS+ authorization status code.
+type AuthorStatus uint8
 
 // Authorization status codes as defined in RFC8907 Section 6.2.
 const (
 	// AuthorStatusPassAdd indicates authorization passed with additional arguments.
-	AuthorStatusPassAdd = 0x01
+	AuthorStatusPassAdd AuthorStatus = 0x01
 
 	// AuthorStatusPassRepl indicates authorization passed with replacement arguments.
-	AuthorStatusPassRepl = 0x02
+	AuthorStatusPassRepl AuthorStatus = 0x02
 
 	// AuthorStatusFail indicates authorization failed.
-	AuthorStatusFail = 0x10
+	AuthorStatusFail AuthorStatus = 0x10
 
 	// AuthorStatusError indicates an error occurred.
-	AuthorStatusError = 0x11
+	AuthorStatusError AuthorStatus = 0x11
 
 	// AuthorStatusFollow indicates the client should follow to another server.
-	AuthorStatusFollow = 0x21
+	AuthorStatusFollow AuthorStatus = 0x21
 )
+
+// AcctFlag is a TACACS+ accounting flag bitmask.
+type AcctFlag uint8
 
 // Accounting flags as defined in RFC8907 Section 7.1.
 const (
 	// AcctFlagStart indicates the start of a task.
-	AcctFlagStart = 0x02
+	AcctFlagStart AcctFlag = 0x02
 
 	// AcctFlagStop indicates the end of a task.
-	AcctFlagStop = 0x04
+	AcctFlagStop AcctFlag = 0x04
 
 	// AcctFlagWatchdog indicates an update for an ongoing task.
-	AcctFlagWatchdog = 0x08
+	AcctFlagWatchdog AcctFlag = 0x08
 )
+
+// AcctStatus is a TACACS+ accounting status code.
+type AcctStatus uint8
 
 // Accounting status codes as defined in RFC8907 Section 7.2.
 const (
 	// AcctStatusSuccess indicates the accounting record was accepted.
-	AcctStatusSuccess = 0x01
+	AcctStatusSuccess AcctStatus = 0x01
 
 	// AcctStatusError indicates an error occurred.
-	AcctStatusError = 0x02
+	AcctStatusError AcctStatus = 0x02
 
 	// AcctStatusFollow indicates the client should follow to another server.
-	AcctStatusFollow = 0x21
+	AcctStatusFollow AcctStatus = 0x21
 )
 
 // HeaderLength is the fixed size of a TACACS+ header in bytes.

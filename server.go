@@ -790,7 +790,7 @@ func (s *Server) cleanupConnection(localSessions map[uint32]*Session, trackingID
 // sendKickedResponse sends an error response for a kicked session.
 func (s *Server) sendKickedResponse(conn net.Conn, header *Header, secret []byte, isTLS bool) {
 	var respBody []byte
-	var respType uint8
+	var respType PacketType
 
 	switch header.Type {
 	case PacketTypeAuthen:
@@ -951,7 +951,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 
 		// Process packet based on type
 		var respBody []byte
-		var respType uint8
+		var respType PacketType
 		var sessionState SessionState
 
 		switch header.Type {
@@ -1171,7 +1171,7 @@ func (s *Server) writePacket(conn net.Conn, header *Header, body []byte, secret 
 	return nil
 }
 
-func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
+func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType) {
 	if header.SeqNo == 1 {
 		return s.handleAuthenStart(ctx, header, body, cs)
 	}
@@ -1179,12 +1179,12 @@ func (s *Server) handleAuthenPacket(ctx context.Context, header *Header, body []
 }
 
 // handleAuthenPacketWithState processes authentication packets and returns session state.
-func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
+func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType, SessionState) {
 	respBody, respType := s.handleAuthenPacket(ctx, header, body, cs)
 
 	// Parse reply to determine session state
 	if len(respBody) > 0 {
-		status := respBody[0] // First byte is always the status
+		status := AuthenStatus(respBody[0]) // First byte is always the status
 		switch status {
 		case AuthenStatusGetData, AuthenStatusGetUser, AuthenStatusGetPass:
 			return respBody, respType, SessionStateActive
@@ -1241,7 +1241,7 @@ func (s *Server) firePacketError(remoteAddr, localAddr net.Addr, err error) {
 	}
 }
 
-func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
+func (s *Server) authenErrorResponse(msg string) ([]byte, PacketType) {
 	reply := &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte(msg)}
 	respBody, _ := reply.MarshalBinary()
 	return respBody, PacketTypeAuthen
@@ -1249,7 +1249,7 @@ func (s *Server) authenErrorResponse(msg string) ([]byte, uint8) {
 
 // handleUnmarshalError fires the appropriate hook and returns an error response for
 // authen packet unmarshal failures. Returns nil if there was no error.
-func (s *Server) handleUnmarshalError(err error, cs *connState, errMsg string) ([]byte, uint8, bool) {
+func (s *Server) handleUnmarshalError(err error, cs *connState, errMsg string) ([]byte, PacketType, bool) {
 	if err == nil {
 		return nil, 0, false
 	}
@@ -1263,7 +1263,7 @@ func (s *Server) handleUnmarshalError(err error, cs *connState, errMsg string) (
 	return resp, ptype, true
 }
 
-func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
+func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType) {
 	start := &AuthenStart{}
 	if resp, ptype, handled := s.handleUnmarshalError(start.UnmarshalBinary(body), cs, "invalid START packet"); handled {
 		return resp, ptype
@@ -1285,7 +1285,7 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	return respBody, PacketTypeAuthen
 }
 
-func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8) {
+func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType) {
 	cont := &AuthenContinue{}
 	if resp, ptype, handled := s.handleUnmarshalError(cont.UnmarshalBinary(body), cs, "invalid CONTINUE packet"); handled {
 		return resp, ptype
@@ -1307,13 +1307,13 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 	return respBody, PacketTypeAuthen
 }
 
-func (s *Server) authorErrorResponse(msg string) ([]byte, uint8) {
+func (s *Server) authorErrorResponse(msg string) ([]byte, PacketType) {
 	resp := &AuthorResponse{Status: AuthorStatusError, ServerMsg: []byte(msg)}
 	respBody, _ := resp.MarshalBinary()
 	return respBody, PacketTypeAuthor
 }
 
-func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
+func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType, SessionState) {
 	request := &AuthorRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid authorization request"
@@ -1350,13 +1350,13 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 	return respBody, PacketTypeAuthor, state
 }
 
-func (s *Server) acctErrorResponse(msg string) ([]byte, uint8) {
+func (s *Server) acctErrorResponse(msg string) ([]byte, PacketType) {
 	resp := &AcctReply{Status: AcctStatusError, ServerMsg: []byte(msg)}
 	respBody, _ := resp.MarshalBinary()
 	return respBody, PacketTypeAcct
 }
 
-func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, uint8, SessionState) {
+func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []byte, cs *connState) ([]byte, PacketType, SessionState) {
 	request := &AcctRequest{}
 	if err := request.UnmarshalBinary(body); err != nil {
 		msg := "invalid accounting request"

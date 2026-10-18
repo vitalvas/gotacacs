@@ -9,18 +9,18 @@ import (
 
 func TestNewAuthorRequest(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
-		p := NewAuthorRequest(AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "testuser")
-		if p.AuthenMethod != uint8(AuthenTypePAP) {
-			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(AuthenTypePAP))
+		p := NewAuthorRequest(AuthenMethod(AuthenTypePAP), AuthenTypeASCII, AuthenServiceLogin, "testuser")
+		if p.AuthenMethod != AuthenMethod(AuthenTypePAP) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, AuthenMethod(AuthenTypePAP))
 		}
 		if p.PrivLevel != uint8(1) {
 			t.Errorf("got %v, want %v", p.PrivLevel, uint8(1))
 		}
-		if p.AuthenType != uint8(AuthenTypeASCII) {
-			t.Errorf("got %v, want %v", p.AuthenType, uint8(AuthenTypeASCII))
+		if p.AuthenType != AuthenTypeASCII {
+			t.Errorf("got %v, want %v", p.AuthenType, AuthenTypeASCII)
 		}
-		if p.Service != uint8(AuthenServiceLogin) {
-			t.Errorf("got %v, want %v", p.Service, uint8(AuthenServiceLogin))
+		if p.Service != AuthenServiceLogin {
+			t.Errorf("got %v, want %v", p.Service, AuthenServiceLogin)
 		}
 		if !bytes.Equal(p.User, []byte("testuser")) {
 			t.Errorf("got %v, want %v", p.User, []byte("testuser"))
@@ -86,7 +86,7 @@ func TestAuthorRequestArgs(t *testing.T) {
 func TestAuthorRequestMarshalBinary(t *testing.T) {
 	t.Run("empty request encoding", func(t *testing.T) {
 		p := &AuthorRequest{
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -98,7 +98,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		// Verify fixed 8-byte header for authorization request
-		expected := []byte{AuthenTypePAP, 1, AuthenTypeASCII, AuthenServiceLogin, 0, 0, 0, 0}
+		expected := []byte{byte(AuthenTypePAP), 1, byte(AuthenTypeASCII), byte(AuthenServiceLogin), 0, 0, 0, 0}
 		if !bytes.Equal(data, expected) {
 			t.Errorf("got %v, want %v", data, expected)
 		}
@@ -106,7 +106,7 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 
 	t.Run("with all fields and args", func(t *testing.T) {
 		p := &AuthorRequest{
-			AuthenMethod: AuthenTypeCHAP,
+			AuthenMethod: AuthenMethod(AuthenTypeCHAP),
 			PrivLevel:    15,
 			AuthenType:   AuthenTypePAP,
 			Service:      AuthenServicePPP,
@@ -200,8 +200,8 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.AuthenMethod != uint8(0x02) {
-			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(0x02))
+		if p.AuthenMethod != AuthenMethod(0x02) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, AuthenMethod(0x02))
 		}
 		if p.PrivLevel != uint8(0x01) {
 			t.Errorf("got %v, want %v", p.PrivLevel, uint8(0x01))
@@ -263,7 +263,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 		{
 			name: "minimal",
 			packet: &AuthorRequest{
-				AuthenMethod: AuthenTypePAP,
+				AuthenMethod: AuthenMethod(AuthenTypePAP),
 				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
@@ -272,7 +272,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 		{
 			name: "with user",
 			packet: &AuthorRequest{
-				AuthenMethod: AuthenTypePAP,
+				AuthenMethod: AuthenMethod(AuthenTypePAP),
 				PrivLevel:    15,
 				AuthenType:   AuthenTypePAP,
 				Service:      AuthenServiceEnable,
@@ -282,7 +282,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 		{
 			name: "with args",
 			packet: &AuthorRequest{
-				AuthenMethod: AuthenTypeCHAP,
+				AuthenMethod: AuthenMethod(AuthenTypeCHAP),
 				PrivLevel:    1,
 				AuthenType:   AuthenTypeASCII,
 				Service:      AuthenServiceLogin,
@@ -293,7 +293,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 		{
 			name: "all fields",
 			packet: &AuthorRequest{
-				AuthenMethod: AuthenTypeMSCHAP,
+				AuthenMethod: AuthenMethod(AuthenTypeMSCHAP),
 				PrivLevel:    0,
 				AuthenType:   AuthenTypeCHAP,
 				Service:      AuthenServicePPP,
@@ -307,7 +307,7 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 			name: "max args",
 			packet: func() *AuthorRequest {
 				p := &AuthorRequest{
-					AuthenMethod: AuthenTypePAP,
+					AuthenMethod: AuthenMethod(AuthenTypePAP),
 					PrivLevel:    1,
 					AuthenType:   AuthenTypeASCII,
 					Service:      AuthenServiceLogin,
@@ -491,8 +491,8 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.Status != uint8(AuthorStatusPassAdd) {
-			t.Errorf("got %v, want %v", p.Status, uint8(AuthorStatusPassAdd))
+		if p.Status != AuthorStatusPassAdd {
+			t.Errorf("got %v, want %v", p.Status, AuthorStatusPassAdd)
 		}
 		if p.RawArgs != nil {
 			t.Errorf("expected nil, got %v", p.RawArgs)
@@ -675,7 +675,7 @@ func TestAuthorResponseHelperMethods(t *testing.T) {
 func TestAuthorRequestEmptyArgs(t *testing.T) {
 	t.Run("zero length arg in list", func(t *testing.T) {
 		p := &AuthorRequest{
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -847,7 +847,7 @@ func BenchmarkAuthorRequestMarshalBinary(b *testing.B) {
 		{
 			name: "minimal",
 			pkt: &AuthorRequest{
-				AuthenMethod: AuthenTypePAP,
+				AuthenMethod: AuthenMethod(AuthenTypePAP),
 				PrivLevel:    1,
 				AuthenType:   AuthenTypePAP,
 				Service:      AuthenServiceLogin,
@@ -858,7 +858,7 @@ func BenchmarkAuthorRequestMarshalBinary(b *testing.B) {
 			name: "with_args",
 			pkt: func() *AuthorRequest {
 				p := &AuthorRequest{
-					AuthenMethod: AuthenTypePAP,
+					AuthenMethod: AuthenMethod(AuthenTypePAP),
 					PrivLevel:    15,
 					AuthenType:   AuthenTypePAP,
 					Service:      AuthenServiceLogin,
@@ -887,7 +887,7 @@ func BenchmarkAuthorRequestMarshalBinary(b *testing.B) {
 
 func BenchmarkAuthorRequestUnmarshalBinary(b *testing.B) {
 	pkt := &AuthorRequest{
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    15,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -944,7 +944,7 @@ func BenchmarkAuthorResponseUnmarshalBinary(b *testing.B) {
 
 func FuzzAuthorRequestUnmarshalBinary(f *testing.F) {
 	validPkt := &AuthorRequest{
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    15,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -957,7 +957,7 @@ func FuzzAuthorRequestUnmarshalBinary(f *testing.F) {
 		f.Add(data)
 	}
 
-	minPkt := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
+	minPkt := &AuthorRequest{AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin}
 	if data, err := minPkt.MarshalBinary(); err == nil {
 		f.Add(data)
 	}

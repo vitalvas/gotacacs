@@ -14,17 +14,17 @@ import (
 //   - SessionID (4 bytes): session identifier
 //   - Length (4 bytes): length of the packet body
 type Header struct {
-	Version   uint8
-	Type      uint8
+	Version   Version
+	Type      PacketType
 	SeqNo     uint8
-	Flags     uint8
+	Flags     HeaderFlag
 	SessionID uint32
 	Length    uint32
 }
 
 // NewHeader creates a new Header with the specified packet type and session ID.
 // It sets the default version and initializes sequence number to 1.
-func NewHeader(packetType uint8, sessionID uint32) *Header {
+func NewHeader(packetType PacketType, sessionID uint32) *Header {
 	return &Header{
 		Version:   MajorVersion<<4 | MinorVersionDefault,
 		Type:      packetType,
@@ -38,10 +38,10 @@ func NewHeader(packetType uint8, sessionID uint32) *Header {
 // MarshalBinary encodes the header to binary format (big-endian).
 func (h *Header) MarshalBinary() ([]byte, error) {
 	buf := make([]byte, HeaderLength)
-	buf[0] = h.Version
-	buf[1] = h.Type
+	buf[0] = byte(h.Version)
+	buf[1] = byte(h.Type)
 	buf[2] = h.SeqNo
-	buf[3] = h.Flags
+	buf[3] = byte(h.Flags)
 	binary.BigEndian.PutUint32(buf[4:8], h.SessionID)
 	binary.BigEndian.PutUint32(buf[8:12], h.Length)
 	return buf, nil
@@ -53,10 +53,10 @@ func (h *Header) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need %d bytes, got %d", ErrBufferTooShort, HeaderLength, len(data))
 	}
 
-	h.Version = data[0]
-	h.Type = data[1]
+	h.Version = Version(data[0])
+	h.Type = PacketType(data[1])
 	h.SeqNo = data[2]
-	h.Flags = data[3]
+	h.Flags = HeaderFlag(data[3])
 	h.SessionID = binary.BigEndian.Uint32(data[4:8])
 	h.Length = binary.BigEndian.Uint32(data[8:12])
 
@@ -92,12 +92,12 @@ func (h *Header) Validate() error {
 
 // MajorVersionNumber returns the major version from the version byte.
 func (h *Header) MajorVersionNumber() uint8 {
-	return h.Version >> 4
+	return uint8(h.Version >> 4)
 }
 
 // MinorVersionNumber returns the minor version from the version byte.
 func (h *Header) MinorVersionNumber() uint8 {
-	return h.Version & 0x0F
+	return uint8(h.Version & 0x0F)
 }
 
 // IsUnencrypted returns true if the unencrypted flag is set.

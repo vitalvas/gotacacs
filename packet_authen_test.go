@@ -9,17 +9,17 @@ import (
 func TestNewAuthenStart(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
 		p := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "testuser")
-		if p.Action != uint8(AuthenActionLogin) {
-			t.Errorf("got %v, want %v", p.Action, uint8(AuthenActionLogin))
+		if p.Action != AuthenActionLogin {
+			t.Errorf("got %v, want %v", p.Action, AuthenActionLogin)
 		}
 		if p.PrivLevel != uint8(1) {
 			t.Errorf("got %v, want %v", p.PrivLevel, uint8(1))
 		}
-		if p.AuthenType != uint8(AuthenTypeASCII) {
-			t.Errorf("got %v, want %v", p.AuthenType, uint8(AuthenTypeASCII))
+		if p.AuthenType != AuthenTypeASCII {
+			t.Errorf("got %v, want %v", p.AuthenType, AuthenTypeASCII)
 		}
-		if p.Service != uint8(AuthenServiceLogin) {
-			t.Errorf("got %v, want %v", p.Service, uint8(AuthenServiceLogin))
+		if p.Service != AuthenServiceLogin {
+			t.Errorf("got %v, want %v", p.Service, AuthenServiceLogin)
 		}
 		if !bytes.Equal(p.User, []byte("testuser")) {
 			t.Errorf("got %v, want %v", p.User, []byte("testuser"))
@@ -164,17 +164,17 @@ func TestAuthenStartUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.Action != uint8(1) {
-			t.Errorf("got %v, want %v", p.Action, uint8(1))
+		if p.Action != 1 {
+			t.Errorf("got %v, want %v", p.Action, 1)
 		}
 		if p.PrivLevel != uint8(1) {
 			t.Errorf("got %v, want %v", p.PrivLevel, uint8(1))
 		}
-		if p.AuthenType != uint8(1) {
-			t.Errorf("got %v, want %v", p.AuthenType, uint8(1))
+		if p.AuthenType != 1 {
+			t.Errorf("got %v, want %v", p.AuthenType, 1)
 		}
-		if p.Service != uint8(1) {
-			t.Errorf("got %v, want %v", p.Service, uint8(1))
+		if p.Service != 1 {
+			t.Errorf("got %v, want %v", p.Service, 1)
 		}
 		if p.User != nil {
 			t.Errorf("expected nil, got %v", p.User)
@@ -389,11 +389,11 @@ func TestAuthenReplyUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if p.Status != uint8(AuthenStatusPass) {
-			t.Errorf("got %v, want %v", p.Status, uint8(AuthenStatusPass))
+		if p.Status != AuthenStatusPass {
+			t.Errorf("got %v, want %v", p.Status, AuthenStatusPass)
 		}
-		if p.Flags != uint8(0) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(0))
+		if p.Flags != 0 {
+			t.Errorf("got %v, want %v", p.Flags, 0)
 		}
 		if p.ServerMsg != nil {
 			t.Errorf("expected nil, got %v", p.ServerMsg)
@@ -557,8 +557,8 @@ func TestNewAuthenContinue(t *testing.T) {
 		if !bytes.Equal(p.UserMsg, []byte("password123")) {
 			t.Errorf("got %v, want %v", p.UserMsg, []byte("password123"))
 		}
-		if p.Flags != uint8(0) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(0))
+		if p.Flags != 0 {
+			t.Errorf("got %v, want %v", p.Flags, 0)
 		}
 		if p.Data != nil {
 			t.Errorf("expected nil, got %v", p.Data)
@@ -659,8 +659,8 @@ func TestAuthenContinueUnmarshalBinary(t *testing.T) {
 		if p.Data != nil {
 			t.Errorf("expected nil, got %v", p.Data)
 		}
-		if p.Flags != uint8(0) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(0))
+		if p.Flags != 0 {
+			t.Errorf("got %v, want %v", p.Flags, 0)
 		}
 	})
 
@@ -764,8 +764,8 @@ func TestAuthenContinueAbortMethods(t *testing.T) {
 		if !p.IsAbort() {
 			t.Errorf("expected true")
 		}
-		if p.Flags != uint8(AuthenContinueFlagAbort) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(AuthenContinueFlagAbort))
+		if p.Flags != AuthenContinueFlagAbort {
+			t.Errorf("got %v, want %v", p.Flags, AuthenContinueFlagAbort)
 		}
 	})
 
@@ -775,8 +775,8 @@ func TestAuthenContinueAbortMethods(t *testing.T) {
 		if p.IsAbort() {
 			t.Errorf("expected false")
 		}
-		if p.Flags != uint8(0) {
-			t.Errorf("got %v, want %v", p.Flags, uint8(0))
+		if p.Flags != 0 {
+			t.Errorf("got %v, want %v", p.Flags, 0)
 		}
 	})
 }

@@ -741,7 +741,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 }
 
 // Accounting sends an accounting record to the TACACS+ server.
-func (c *Client) Accounting(ctx context.Context, flags uint8, username string, args []string) (*AcctReply, error) {
+func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string, args []string) (*AcctReply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

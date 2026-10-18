@@ -16,7 +16,7 @@ import (
 )
 
 // sendInvalidPacketAndGetResponse sends an invalid packet to the server and returns the response body
-func sendInvalidPacketAndGetResponse(t *testing.T, addr string, packetType uint8, secret []byte) []byte {
+func sendInvalidPacketAndGetResponse(t *testing.T, addr string, packetType PacketType, secret []byte) []byte {
 	t.Helper()
 
 	conn, err := net.Dial("tcp", addr)
@@ -376,7 +376,7 @@ func TestHandlerFuncAdapters(t *testing.T) {
 		})
 
 		reply := handler.HandleAuthenContinue(context.Background(), nil)
-		tv301_1 := uint8(AuthenStatusError)
+		tv301_1 := AuthenStatusError
 		if reply.Status != tv301_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv301_1)
 		}
@@ -966,7 +966,7 @@ func TestServerNoHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv740_1 := uint8(AuthenStatusError)
+		tv740_1 := AuthenStatusError
 		if reply.Status != tv740_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv740_1)
 		}
@@ -995,7 +995,7 @@ func TestServerNoHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv762_1 := uint8(AuthorStatusError)
+		tv762_1 := AuthorStatusError
 		if resp.Status != tv762_1 {
 			t.Errorf("got %v, want %v", resp.Status, tv762_1)
 		}
@@ -1024,7 +1024,7 @@ func TestServerNoHandler(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv784_1 := uint8(AcctStatusError)
+		tv784_1 := AcctStatusError
 		if reply.Status != tv784_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv784_1)
 		}
@@ -1139,7 +1139,7 @@ func TestServerInvalidPacket(t *testing.T) {
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(respBody)
 
-		tv882_1 := uint8(AuthenStatusError)
+		tv882_1 := AuthenStatusError
 		if reply.Status != tv882_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv882_1)
 		}
@@ -1211,7 +1211,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv940_1 := uint8(AuthenStatusError)
+		tv940_1 := AuthenStatusError
 		if reply.Status != tv940_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv940_1)
 		}
@@ -1245,7 +1245,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv967_1 := uint8(AuthorStatusError)
+		tv967_1 := AuthorStatusError
 		if resp.Status != tv967_1 {
 			t.Errorf("got %v, want %v", resp.Status, tv967_1)
 		}
@@ -1279,7 +1279,7 @@ func TestServerHandlerNilReply(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		tv994_1 := uint8(AcctStatusError)
+		tv994_1 := AcctStatusError
 		if reply.Status != tv994_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv994_1)
 		}
@@ -2130,7 +2130,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		deobfResp := Obfuscate(respHeader, secret, respBody)
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(deobfResp)
-		tv1696_1 := uint8(AuthenStatusGetPass)
+		tv1696_1 := AuthenStatusGetPass
 		if reply.Status != tv1696_1 {
 			t.Fatalf("got %v, want %v", reply.Status, tv1696_1)
 		}
@@ -2165,7 +2165,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		errReply := &AuthenReply{}
 		errReply.UnmarshalBinary(errBody)
 
-		tv1728_1 := uint8(AuthenStatusError)
+		tv1728_1 := AuthenStatusError
 		if errReply.Status != tv1728_1 {
 			t.Errorf("got %v, want %v", errReply.Status, tv1728_1)
 		}
@@ -2249,7 +2249,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		resp := &AuthorResponse{}
 		resp.UnmarshalBinary(respBody)
 
-		tv1801_1 := uint8(AuthorStatusError)
+		tv1801_1 := AuthorStatusError
 		if resp.Status != tv1801_1 {
 			t.Errorf("got %v, want %v", resp.Status, tv1801_1)
 		}
@@ -2277,7 +2277,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		reply := &AcctReply{}
 		reply.UnmarshalBinary(respBody)
 
-		tv1824_1 := uint8(AcctStatusError)
+		tv1824_1 := AcctStatusError
 		if reply.Status != tv1824_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv1824_1)
 		}
@@ -2758,7 +2758,7 @@ func TestServerSessions(t *testing.T) {
 		if sessions[0].TLSState != nil {
 			t.Errorf("expected nil, got %v", sessions[0].TLSState)
 		}
-		tv2199_1 := uint8(PacketTypeAuthen)
+		tv2199_1 := PacketTypeAuthen
 		if sessions[0].PacketType != tv2199_1 {
 			t.Errorf("got %v, want %v", sessions[0].PacketType, tv2199_1)
 		}
@@ -3124,7 +3124,7 @@ func TestServerHooks(t *testing.T) {
 		if startEvent.TrackingID == 0 {
 			t.Error("expected non-zero")
 		}
-		tv2483_1 := uint8(PacketTypeAuthen)
+		tv2483_1 := PacketTypeAuthen
 		if startEvent.PacketType != tv2483_1 {
 			t.Errorf("got %v, want %v", startEvent.PacketType, tv2483_1)
 		}
@@ -3597,7 +3597,7 @@ func TestComposedHandlerAuthenContinueNil(t *testing.T) {
 	t.Run("nil authen handler returns error on continue", func(t *testing.T) {
 		h := &ComposedHandler{authen: nil, author: nil, acct: nil}
 		reply := h.HandleAuthenContinue(context.Background(), &AuthenContinueRequest{})
-		tv2871_1 := uint8(AuthenStatusError)
+		tv2871_1 := AuthenStatusError
 		if reply.Status != tv2871_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv2871_1)
 		}
@@ -3885,7 +3885,7 @@ func TestSendKickedResponseAuthorSession(t *testing.T) {
 }
 
 func TestSendKickedResponseDirectUnit(t *testing.T) {
-	sendKickedAndReadResponse := func(t *testing.T, packetType uint8, version uint8) []byte {
+	sendKickedAndReadResponse := func(t *testing.T, packetType PacketType, version Version) []byte {
 		t.Helper()
 		server := NewServer(WithHandler(&testHandler{}))
 
@@ -3934,7 +3934,7 @@ func TestSendKickedResponseDirectUnit(t *testing.T) {
 		if tv3146_1 != nil {
 			t.Fatalf("unexpected error: %v", tv3146_1)
 		}
-		tv3147_1 := uint8(AuthorStatusError)
+		tv3147_1 := AuthorStatusError
 		if resp.Status != tv3147_1 {
 			t.Errorf("got %v, want %v", resp.Status, tv3147_1)
 		}
@@ -3947,7 +3947,7 @@ func TestSendKickedResponseDirectUnit(t *testing.T) {
 		if tv3153_1 != nil {
 			t.Fatalf("unexpected error: %v", tv3153_1)
 		}
-		tv3154_1 := uint8(AcctStatusError)
+		tv3154_1 := AcctStatusError
 		if reply.Status != tv3154_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv3154_1)
 		}
@@ -4210,7 +4210,7 @@ func TestWritePacketTLSModeUnit(t *testing.T) {
 		if tv3376_1 != nil {
 			t.Fatalf("unexpected error: %v", tv3376_1)
 		}
-		tv3377_1 := uint8(AuthenStatusPass)
+		tv3377_1 := AuthenStatusPass
 		if parsedReply.Status != tv3377_1 {
 			t.Errorf("got %v, want %v", parsedReply.Status, tv3377_1)
 		}
@@ -5109,7 +5109,7 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 
 		resp := &AuthorResponse{}
 		resp.UnmarshalBinary(respBody)
-		tv4183_1 := uint8(AuthorStatusError)
+		tv4183_1 := AuthorStatusError
 		if resp.Status != tv4183_1 {
 			t.Errorf("got %v, want %v", resp.Status, tv4183_1)
 		}
@@ -5193,7 +5193,7 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 
 		reply := &AcctReply{}
 		reply.UnmarshalBinary(respBody)
-		tv4256_1 := uint8(AcctStatusError)
+		tv4256_1 := AcctStatusError
 		if reply.Status != tv4256_1 {
 			t.Errorf("got %v, want %v", reply.Status, tv4256_1)
 		}
@@ -5394,7 +5394,7 @@ func TestServeConnPAP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4433_1 := uint8(AuthenStatusPass)
+	tv4433_1 := AuthenStatusPass
 	if reply.Status != tv4433_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4433_1)
 	}
@@ -5413,7 +5413,7 @@ func TestServeConnASCIIMultiExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4447_1 := uint8(AuthenStatusPass)
+	tv4447_1 := AuthenStatusPass
 	if reply.Status != tv4447_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4447_1)
 	}
@@ -5431,7 +5431,7 @@ func TestServeConnAuthorize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4458_1 := uint8(AuthorStatusPassAdd)
+	tv4458_1 := AuthorStatusPassAdd
 	if resp.Status != tv4458_1 {
 		t.Errorf("got %v, want %v", resp.Status, tv4458_1)
 	}
@@ -5446,7 +5446,7 @@ func TestServeConnAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4468_1 := uint8(AcctStatusSuccess)
+	tv4468_1 := AcctStatusSuccess
 	if reply.Status != tv4468_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4468_1)
 	}
@@ -5473,7 +5473,7 @@ func TestServeConnFiresHooks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4490_1 := uint8(AuthenStatusPass)
+	tv4490_1 := AuthenStatusPass
 	if reply.Status != tv4490_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4490_1)
 	}
@@ -5515,7 +5515,7 @@ func TestServeConnNoListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4512_1 := uint8(AuthenStatusPass)
+	tv4512_1 := AuthenStatusPass
 	if reply.Status != tv4512_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4512_1)
 	}
@@ -5538,7 +5538,7 @@ func TestServeStartsAfterServeConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4525_1 := uint8(AuthenStatusPass)
+	tv4525_1 := AuthenStatusPass
 	if pipeReply.Status != tv4525_1 {
 		t.Errorf("got %v, want %v", pipeReply.Status, tv4525_1)
 	}
@@ -5567,7 +5567,7 @@ func TestServeStartsAfterServeConn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4540_1 := uint8(AuthenStatusPass)
+	tv4540_1 := AuthenStatusPass
 	if reply.Status != tv4540_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4540_1)
 	}
@@ -5652,7 +5652,7 @@ func TestServeConnRestartsAfterShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4598_1 := uint8(AuthenStatusPass)
+	tv4598_1 := AuthenStatusPass
 	if reply.Status != tv4598_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4598_1)
 	}
@@ -5673,7 +5673,7 @@ func TestServeConnRestartsAfterShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	tv4608_1 := uint8(AuthenStatusPass)
+	tv4608_1 := AuthenStatusPass
 	if reply.Status != tv4608_1 {
 		t.Errorf("got %v, want %v", reply.Status, tv4608_1)
 	}

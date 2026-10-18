@@ -231,7 +231,7 @@ type SessionInfo struct {
 	// TLSState is the TLS connection state. Nil for non-TLS connections.
 	TLSState *tls.ConnectionState
 	// PacketType is the TACACS+ packet type (authen, author, acct).
-	PacketType uint8
+	PacketType PacketType
 	// State is the current session state.
 	State SessionState
 	// StartedAt is when the session was created.

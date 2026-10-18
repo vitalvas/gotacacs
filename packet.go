@@ -124,8 +124,8 @@ func ParsePacket(header *Header, data []byte) (Packet, error) {
 	}
 }
 
-// PacketType returns the packet type constant for a given packet.
-func PacketType(p Packet) uint8 {
+// TypeOf returns the packet type constant for a given packet.
+func TypeOf(p Packet) PacketType {
 	switch p.(type) {
 	case *AuthenStart, *AuthenReply, *AuthenContinue:
 		return PacketTypeAuthen

@@ -255,7 +255,7 @@ func TestParseAuthenPacket(t *testing.T) {
 func TestParseAuthorPacket(t *testing.T) {
 	t.Run("parse REQUEST (seq=1)", func(t *testing.T) {
 		original := &AuthorRequest{
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -349,7 +349,7 @@ func TestParseAcctPacket(t *testing.T) {
 	t.Run("parse REQUEST (seq=1)", func(t *testing.T) {
 		original := &AcctRequest{
 			Flags:        AcctFlagStart,
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -463,7 +463,7 @@ func TestParsePacket(t *testing.T) {
 	t.Run("parse authorization packet", func(t *testing.T) {
 		header := &Header{Type: PacketTypeAuthor, SeqNo: 1}
 		original := &AuthorRequest{
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -484,7 +484,7 @@ func TestParsePacket(t *testing.T) {
 		header := &Header{Type: PacketTypeAcct, SeqNo: 1}
 		original := &AcctRequest{
 			Flags:        AcctFlagStart,
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypeASCII,
 			Service:      AuthenServiceLogin,
@@ -526,7 +526,7 @@ func TestParsePacket(t *testing.T) {
 func TestPacketType(t *testing.T) {
 	tests := []struct {
 		packet   Packet
-		expected uint8
+		expected PacketType
 	}{
 		{&AuthenStart{}, PacketTypeAuthen},
 		{&AuthenReply{}, PacketTypeAuthen},
@@ -539,7 +539,7 @@ func TestPacketType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run("", func(t *testing.T) {
-			if got := PacketType(tt.packet); got != tt.expected {
+			if got := TypeOf(tt.packet); got != tt.expected {
 				t.Errorf("got %v, want %v", got, tt.expected)
 			}
 		})
@@ -547,7 +547,7 @@ func TestPacketType(t *testing.T) {
 
 	t.Run("unknown packet type returns 0", func(t *testing.T) {
 		// Use a mock type that implements Packet but isn't one of our types
-		if got := PacketType(nil); got != uint8(0) {
+		if got := TypeOf(nil); got != 0 {
 			t.Errorf("got %v, want %v", got, uint8(0))
 		}
 	})
@@ -647,7 +647,7 @@ func BenchmarkParseAuthenPacket(b *testing.B) {
 
 func BenchmarkParseAuthorPacket(b *testing.B) {
 	b.Run("request", func(b *testing.B) {
-		p := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+		p := &AuthorRequest{AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
 		data, _ := p.MarshalBinary()
 
 		b.ReportAllocs()
@@ -673,7 +673,7 @@ func BenchmarkParseAcctPacket(b *testing.B) {
 	b.Run("request", func(b *testing.B) {
 		p := &AcctRequest{
 			Flags:        AcctFlagStart,
-			AuthenMethod: AuthenTypePAP,
+			AuthenMethod: AuthenMethod(AuthenTypePAP),
 			PrivLevel:    1,
 			AuthenType:   AuthenTypePAP,
 			Service:      AuthenServiceLogin,
@@ -764,7 +764,7 @@ func FuzzParseAuthenPacket(f *testing.F) {
 }
 
 func FuzzParseAuthorPacket(f *testing.F) {
-	req := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	req := &AuthorRequest{AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
 	if data, _ := req.MarshalBinary(); data != nil {
 		f.Add(uint8(1), data)
 	}
@@ -794,7 +794,7 @@ func FuzzParseAuthorPacket(f *testing.F) {
 func FuzzParseAcctPacket(f *testing.F) {
 	req := &AcctRequest{
 		Flags:        AcctFlagStart,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -832,14 +832,14 @@ func FuzzParsePacket(f *testing.F) {
 		f.Add(uint8(PacketTypeAuthen), uint8(1), data)
 	}
 
-	authorReq := &AuthorRequest{AuthenMethod: AuthenTypePAP, PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
+	authorReq := &AuthorRequest{AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
 	if data, _ := authorReq.MarshalBinary(); data != nil {
 		f.Add(uint8(PacketTypeAuthor), uint8(1), data)
 	}
 
 	acctReq := &AcctRequest{
 		Flags:        AcctFlagStart,
-		AuthenMethod: AuthenTypePAP,
+		AuthenMethod: AuthenMethod(AuthenTypePAP),
 		PrivLevel:    1,
 		AuthenType:   AuthenTypePAP,
 		Service:      AuthenServiceLogin,
@@ -852,7 +852,7 @@ func FuzzParsePacket(f *testing.F) {
 	f.Fuzz(func(t *testing.T, packetType, seqNo uint8, data []byte) {
 		h := &Header{
 			Version:   MajorVersion<<4 | MinorVersionDefault,
-			Type:      packetType,
+			Type:      PacketType(packetType),
 			SeqNo:     seqNo,
 			SessionID: 1,
 		}

@@ -17,9 +17,9 @@ var errTest = errors.New("test error")
 
 // mockResponseConfig configures how the mock handler should respond
 type mockResponseConfig struct {
-	packetType uint8
+	packetType PacketType
 	seqNo      uint8
-	flags      uint8
+	flags      HeaderFlag
 	sessionMod uint32 // added to session ID (0 = correct, 1+ = mismatch)
 	body       []byte
 }
@@ -726,8 +726,8 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		if reply == nil {
 			t.Errorf("expected non-nil")
 		}
-		if reply.Status != uint8(AuthenStatusFollow) {
-			t.Errorf("got %v, want %v", reply.Status, uint8(AuthenStatusFollow))
+		if reply.Status != AuthenStatusFollow {
+			t.Errorf("got %v, want %v", reply.Status, AuthenStatusFollow)
 		}
 	})
 
@@ -782,8 +782,8 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		if reply == nil {
 			t.Errorf("expected non-nil")
 		}
-		if reply.Status != uint8(AuthenStatusRestart) {
-			t.Errorf("got %v, want %v", reply.Status, uint8(AuthenStatusRestart))
+		if reply.Status != AuthenStatusRestart {
+			t.Errorf("got %v, want %v", reply.Status, AuthenStatusRestart)
 		}
 	})
 
@@ -1380,8 +1380,8 @@ func TestClientErrorPaths(t *testing.T) {
 		if result == nil {
 			t.Errorf("expected non-nil")
 		}
-		if result.Status != uint8(0xFF) {
-			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		if result.Status != 0xFF {
+			t.Errorf("got %v, want %v", result.Status, 0xFF)
 		}
 		if client.IsConnected() {
 			t.Errorf("expected false")
@@ -1414,8 +1414,8 @@ func TestClientErrorPaths(t *testing.T) {
 		if result == nil {
 			t.Errorf("expected non-nil")
 		}
-		if result.Status != uint8(0xFF) {
-			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		if result.Status != 0xFF {
+			t.Errorf("got %v, want %v", result.Status, 0xFF)
 		}
 		if client.IsConnected() {
 			t.Errorf("expected false")
@@ -1906,8 +1906,8 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 		if result == nil {
 			t.Errorf("expected non-nil")
 		}
-		if result.Status != uint8(AuthenStatusGetPass) {
-			t.Errorf("got %v, want %v", result.Status, uint8(AuthenStatusGetPass))
+		if result.Status != AuthenStatusGetPass {
+			t.Errorf("got %v, want %v", result.Status, AuthenStatusGetPass)
 		}
 		if client.IsConnected() {
 			t.Errorf("expected false")
@@ -1942,8 +1942,8 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 		if result == nil {
 			t.Errorf("expected non-nil")
 		}
-		if result.Status != uint8(0xFF) {
-			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		if result.Status != 0xFF {
+			t.Errorf("got %v, want %v", result.Status, 0xFF)
 		}
 		if client.IsConnected() {
 			t.Errorf("expected false")

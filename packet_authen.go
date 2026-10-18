@@ -8,18 +8,18 @@ import (
 // AuthenStart represents a TACACS+ authentication START packet as defined in RFC8907 Section 5.1.
 // This packet is sent by the client to initiate an authentication session.
 type AuthenStart struct {
-	Action     uint8  // Authentication action (LOGIN, CHPASS, SENDAUTH)
-	PrivLevel  uint8  // Privilege level
-	AuthenType uint8  // Authentication type (ASCII, PAP, CHAP, etc.)
-	Service    uint8  // Authentication service (LOGIN, ENABLE, etc.)
-	User       []byte // Username (optional)
-	Port       []byte // Port identifier (optional)
-	RemoteAddr []byte // Remote address (optional)
-	Data       []byte // Authentication data (optional)
+	Action     AuthenAction  // Authentication action (LOGIN, CHPASS, SENDAUTH)
+	PrivLevel  uint8         // Privilege level
+	AuthenType AuthenType    // Authentication type (ASCII, PAP, CHAP, etc.)
+	Service    AuthenService // Authentication service (LOGIN, ENABLE, etc.)
+	User       []byte        // Username (optional)
+	Port       []byte        // Port identifier (optional)
+	RemoteAddr []byte        // Remote address (optional)
+	Data       []byte        // Authentication data (optional)
 }
 
 // NewAuthenStart creates a new AuthenStart packet with the specified parameters.
-func NewAuthenStart(action, authenType, service uint8, user string) *AuthenStart {
+func NewAuthenStart(action AuthenAction, authenType AuthenType, service AuthenService, user string) *AuthenStart {
 	return &AuthenStart{
 		Action:     action,
 		PrivLevel:  1, // Default privilege level
@@ -44,10 +44,10 @@ func (p *AuthenStart) MarshalBinary() ([]byte, error) {
 	size := 8 + userLen + portLen + remAddrLen + dataLen
 	buf := make([]byte, size)
 
-	buf[0] = p.Action
+	buf[0] = byte(p.Action)
 	buf[1] = p.PrivLevel
-	buf[2] = p.AuthenType
-	buf[3] = p.Service
+	buf[2] = byte(p.AuthenType)
+	buf[3] = byte(p.Service)
 	buf[4] = uint8(userLen)
 	buf[5] = uint8(portLen)
 	buf[6] = uint8(remAddrLen)
@@ -71,10 +71,10 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need at least 8 bytes, got %d", ErrBufferTooShort, len(data))
 	}
 
-	p.Action = data[0]
+	p.Action = AuthenAction(data[0])
 	p.PrivLevel = data[1]
-	p.AuthenType = data[2]
-	p.Service = data[3]
+	p.AuthenType = AuthenType(data[2])
+	p.Service = AuthenService(data[3])
 
 	userLen := int(data[4])
 	portLen := int(data[5])
@@ -130,10 +130,10 @@ func (p *AuthenStart) UnmarshalBinary(data []byte) error {
 // AuthenReply represents a TACACS+ authentication REPLY packet as defined in RFC8907 Section 5.2.
 // This packet is sent by the server in response to START or CONTINUE packets.
 type AuthenReply struct {
-	Status    uint8  // Authentication status (PASS, FAIL, GETDATA, etc.)
-	Flags     uint8  // Reply flags (NOECHO)
-	ServerMsg []byte // Server message to display (optional)
-	Data      []byte // Authentication data (optional)
+	Status    AuthenStatus    // Authentication status (PASS, FAIL, GETDATA, etc.)
+	Flags     AuthenReplyFlag // Reply flags (NOECHO)
+	ServerMsg []byte          // Server message to display (optional)
+	Data      []byte          // Authentication data (optional)
 }
 
 // MarshalBinary encodes the AuthenReply packet to binary format.
@@ -149,8 +149,8 @@ func (p *AuthenReply) MarshalBinary() ([]byte, error) {
 	size := 6 + serverMsgLen + dataLen
 	buf := make([]byte, size)
 
-	buf[0] = p.Status
-	buf[1] = p.Flags
+	buf[0] = byte(p.Status)
+	buf[1] = byte(p.Flags)
 	binary.BigEndian.PutUint16(buf[2:4], uint16(serverMsgLen))
 	binary.BigEndian.PutUint16(buf[4:6], uint16(dataLen))
 
@@ -168,8 +168,8 @@ func (p *AuthenReply) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("%w: need at least 6 bytes, got %d", ErrBufferTooShort, len(data))
 	}
 
-	p.Status = data[0]
-	p.Flags = data[1]
+	p.Status = AuthenStatus(data[0])
+	p.Flags = AuthenReplyFlag(data[1])
 	serverMsgLen := int(binary.BigEndian.Uint16(data[2:4]))
 	dataLen := int(binary.BigEndian.Uint16(data[4:6]))
 
@@ -233,9 +233,9 @@ func (p *AuthenReply) NoEcho() bool {
 // AuthenContinue represents a TACACS+ authentication CONTINUE packet as defined in RFC8907 Section 5.3.
 // This packet is sent by the client in response to a REPLY requesting more data.
 type AuthenContinue struct {
-	Flags   uint8  // Continue flags (ABORT)
-	UserMsg []byte // User message/response (optional)
-	Data    []byte // Authentication data (optional)
+	Flags   AuthenContinueFlag // Continue flags (ABORT)
+	UserMsg []byte             // User message/response (optional)
+	Data    []byte             // Authentication data (optional)
 }
 
 // NewAuthenContinue creates a new AuthenContinue packet with the specified user message.
@@ -260,7 +260,7 @@ func (p *AuthenContinue) MarshalBinary() ([]byte, error) {
 
 	binary.BigEndian.PutUint16(buf[0:2], uint16(userMsgLen))
 	binary.BigEndian.PutUint16(buf[2:4], uint16(dataLen))
-	buf[4] = p.Flags
+	buf[4] = byte(p.Flags)
 
 	offset := 5
 	copy(buf[offset:], p.UserMsg)
@@ -278,7 +278,7 @@ func (p *AuthenContinue) UnmarshalBinary(data []byte) error {
 
 	userMsgLen := int(binary.BigEndian.Uint16(data[0:2]))
 	dataLen := int(binary.BigEndian.Uint16(data[2:4]))
-	p.Flags = data[4]
+	p.Flags = AuthenContinueFlag(data[4])
 
 	expectedLen := 5 + userMsgLen + dataLen
 	if len(data) < expectedLen {

@@ -9,16 +9,16 @@ import (
 func TestNewHeader(t *testing.T) {
 	t.Run("authentication header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthen, 0x12345678)
-		if h.Version != uint8(0xc0) {
+		if h.Version != 0xc0 {
 			t.Errorf("got %v, want %v", h.Version, uint8(0xc0))
 		}
-		if h.Type != uint8(PacketTypeAuthen) {
+		if h.Type != PacketTypeAuthen {
 			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthen))
 		}
 		if h.SeqNo != uint8(1) {
 			t.Errorf("got %v, want %v", h.SeqNo, uint8(1))
 		}
-		if h.Flags != uint8(0) {
+		if h.Flags != 0 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0))
 		}
 		if h.SessionID != uint32(0x12345678) {
@@ -31,7 +31,7 @@ func TestNewHeader(t *testing.T) {
 
 	t.Run("authorization header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthor, 0xABCDEF00)
-		if h.Type != uint8(PacketTypeAuthor) {
+		if h.Type != PacketTypeAuthor {
 			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthor))
 		}
 		if h.SessionID != uint32(0xABCDEF00) {
@@ -41,7 +41,7 @@ func TestNewHeader(t *testing.T) {
 
 	t.Run("accounting header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAcct, 0xFFFFFFFF)
-		if h.Type != uint8(PacketTypeAcct) {
+		if h.Type != PacketTypeAcct {
 			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAcct))
 		}
 		if h.SessionID != uint32(0xFFFFFFFF) {
@@ -164,16 +164,16 @@ func TestHeaderUnmarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if h.Version != uint8(0xc0) {
+		if h.Version != 0xc0 {
 			t.Errorf("got %v, want %v", h.Version, uint8(0xc0))
 		}
-		if h.Type != uint8(0x01) {
+		if h.Type != 0x01 {
 			t.Errorf("got %v, want %v", h.Type, uint8(0x01))
 		}
 		if h.SeqNo != uint8(0x01) {
 			t.Errorf("got %v, want %v", h.SeqNo, uint8(0x01))
 		}
-		if h.Flags != uint8(0x00) {
+		if h.Flags != 0x00 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
 		}
 		if h.SessionID != uint32(0x12345678) {
@@ -327,7 +327,7 @@ func TestHeaderValidate(t *testing.T) {
 	})
 
 	t.Run("invalid major version", func(t *testing.T) {
-		invalidVersions := []uint8{0x00, 0x10, 0xb0, 0xd0, 0xf0}
+		invalidVersions := []Version{0x00, 0x10, 0xb0, 0xd0, 0xf0}
 
 		for _, v := range invalidVersions {
 			h := &Header{Version: v, Type: PacketTypeAuthen, SeqNo: 1}
@@ -342,7 +342,7 @@ func TestHeaderValidate(t *testing.T) {
 	})
 
 	t.Run("invalid minor version", func(t *testing.T) {
-		invalidMinorVersions := []uint8{0xc2, 0xc3, 0xc4, 0xcf}
+		invalidMinorVersions := []Version{0xc2, 0xc3, 0xc4, 0xcf}
 
 		for _, v := range invalidMinorVersions {
 			h := &Header{Version: v, Type: PacketTypeAuthen, SeqNo: 1}
@@ -357,7 +357,7 @@ func TestHeaderValidate(t *testing.T) {
 	})
 
 	t.Run("invalid packet type", func(t *testing.T) {
-		invalidTypes := []uint8{0x00, 0x04, 0x05, 0xFF}
+		invalidTypes := []PacketType{0x00, 0x04, 0x05, 0xFF}
 
 		for _, pt := range invalidTypes {
 			h := &Header{Version: 0xc0, Type: pt, SeqNo: 1}
@@ -386,7 +386,7 @@ func TestHeaderValidate(t *testing.T) {
 func TestHeaderVersionMethods(t *testing.T) {
 	t.Run("major version number", func(t *testing.T) {
 		testCases := []struct {
-			version uint8
+			version Version
 			major   uint8
 		}{
 			{0xc0, 0x0c},
@@ -406,7 +406,7 @@ func TestHeaderVersionMethods(t *testing.T) {
 
 	t.Run("minor version number", func(t *testing.T) {
 		testCases := []struct {
-			version uint8
+			version Version
 			minor   uint8
 		}{
 			{0xc0, 0x00},
@@ -428,7 +428,7 @@ func TestHeaderVersionMethods(t *testing.T) {
 func TestHeaderFlagMethods(t *testing.T) {
 	t.Run("is unencrypted", func(t *testing.T) {
 		testCases := []struct {
-			flags       uint8
+			flags       HeaderFlag
 			unencrypted bool
 		}{
 			{0x00, false},
@@ -448,7 +448,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 
 	t.Run("is single connect", func(t *testing.T) {
 		testCases := []struct {
-			flags         uint8
+			flags         HeaderFlag
 			singleConnect bool
 		}{
 			{0x00, false},
@@ -473,7 +473,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if !h.IsUnencrypted() {
 			t.Errorf("expected true")
 		}
-		if h.Flags != uint8(0x01) {
+		if h.Flags != 0x01 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x01))
 		}
 
@@ -481,7 +481,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if h.IsUnencrypted() {
 			t.Errorf("expected false")
 		}
-		if h.Flags != uint8(0x00) {
+		if h.Flags != 0x00 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
 		}
 	})
@@ -493,7 +493,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if !h.IsSingleConnect() {
 			t.Errorf("expected true")
 		}
-		if h.Flags != uint8(0x04) {
+		if h.Flags != 0x04 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x04))
 		}
 
@@ -501,7 +501,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if h.IsSingleConnect() {
 			t.Errorf("expected false")
 		}
-		if h.Flags != uint8(0x00) {
+		if h.Flags != 0x00 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
 		}
 	})
@@ -516,7 +516,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if !h.IsSingleConnect() {
 			t.Errorf("expected true")
 		}
-		if h.Flags != uint8(0x05) {
+		if h.Flags != 0x05 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x05))
 		}
 
@@ -527,7 +527,7 @@ func TestHeaderFlagMethods(t *testing.T) {
 		if !h.IsSingleConnect() {
 			t.Errorf("expected true")
 		}
-		if h.Flags != uint8(0x04) {
+		if h.Flags != 0x04 {
 			t.Errorf("got %v, want %v", h.Flags, uint8(0x04))
 		}
 	})
