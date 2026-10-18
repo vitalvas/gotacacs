@@ -1,39 +1,59 @@
 package gotacacs
 
 import (
+	"bytes"
 	"errors"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestNewHeader(t *testing.T) {
 	t.Run("authentication header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthen, 0x12345678)
-		assert.Equal(t, uint8(0xc0), h.Version)
-		assert.Equal(t, uint8(PacketTypeAuthen), h.Type)
-		assert.Equal(t, uint8(1), h.SeqNo)
-		assert.Equal(t, uint8(0), h.Flags)
-		assert.Equal(t, uint32(0x12345678), h.SessionID)
-		assert.Equal(t, uint32(0), h.Length)
+		if h.Version != uint8(0xc0) {
+			t.Errorf("got %v, want %v", h.Version, uint8(0xc0))
+		}
+		if h.Type != uint8(PacketTypeAuthen) {
+			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthen))
+		}
+		if h.SeqNo != uint8(1) {
+			t.Errorf("got %v, want %v", h.SeqNo, uint8(1))
+		}
+		if h.Flags != uint8(0) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0))
+		}
+		if h.SessionID != uint32(0x12345678) {
+			t.Errorf("got %v, want %v", h.SessionID, uint32(0x12345678))
+		}
+		if h.Length != uint32(0) {
+			t.Errorf("got %v, want %v", h.Length, uint32(0))
+		}
 	})
 
 	t.Run("authorization header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthor, 0xABCDEF00)
-		assert.Equal(t, uint8(PacketTypeAuthor), h.Type)
-		assert.Equal(t, uint32(0xABCDEF00), h.SessionID)
+		if h.Type != uint8(PacketTypeAuthor) {
+			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthor))
+		}
+		if h.SessionID != uint32(0xABCDEF00) {
+			t.Errorf("got %v, want %v", h.SessionID, uint32(0xABCDEF00))
+		}
 	})
 
 	t.Run("accounting header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAcct, 0xFFFFFFFF)
-		assert.Equal(t, uint8(PacketTypeAcct), h.Type)
-		assert.Equal(t, uint32(0xFFFFFFFF), h.SessionID)
+		if h.Type != uint8(PacketTypeAcct) {
+			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAcct))
+		}
+		if h.SessionID != uint32(0xFFFFFFFF) {
+			t.Errorf("got %v, want %v", h.SessionID, uint32(0xFFFFFFFF))
+		}
 	})
 
 	t.Run("zero session ID", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthen, 0)
-		assert.Equal(t, uint32(0), h.SessionID)
+		if h.SessionID != uint32(0) {
+			t.Errorf("got %v, want %v", h.SessionID, uint32(0))
+		}
 	})
 }
 
@@ -49,15 +69,31 @@ func TestHeaderMarshalBinary(t *testing.T) {
 		}
 
 		data, err := h.MarshalBinary()
-		require.NoError(t, err)
-		require.Len(t, data, HeaderLength)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(data) != HeaderLength {
+			t.Fatalf("len = %d, want %d", len(data), HeaderLength)
+		}
 
-		assert.Equal(t, uint8(0xc0), data[0])
-		assert.Equal(t, uint8(0x01), data[1])
-		assert.Equal(t, uint8(0x01), data[2])
-		assert.Equal(t, uint8(0x00), data[3])
-		assert.Equal(t, []byte{0x12, 0x34, 0x56, 0x78}, data[4:8])
-		assert.Equal(t, []byte{0x00, 0x00, 0x01, 0x00}, data[8:12])
+		if data[0] != uint8(0xc0) {
+			t.Errorf("got %v, want %v", data[0], uint8(0xc0))
+		}
+		if data[1] != uint8(0x01) {
+			t.Errorf("got %v, want %v", data[1], uint8(0x01))
+		}
+		if data[2] != uint8(0x01) {
+			t.Errorf("got %v, want %v", data[2], uint8(0x01))
+		}
+		if data[3] != uint8(0x00) {
+			t.Errorf("got %v, want %v", data[3], uint8(0x00))
+		}
+		if !bytes.Equal(data[4:8], []byte{0x12, 0x34, 0x56, 0x78}) {
+			t.Errorf("got %v, want %v", data[4:8], []byte{0x12, 0x34, 0x56, 0x78})
+		}
+		if !bytes.Equal(data[8:12], []byte{0x00, 0x00, 0x01, 0x00}) {
+			t.Errorf("got %v, want %v", data[8:12], []byte{0x00, 0x00, 0x01, 0x00})
+		}
 	})
 
 	t.Run("with flags", func(t *testing.T) {
@@ -71,14 +107,28 @@ func TestHeaderMarshalBinary(t *testing.T) {
 		}
 
 		data, err := h.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint8(0xc1), data[0])
-		assert.Equal(t, uint8(0x02), data[1])
-		assert.Equal(t, uint8(0x05), data[2])
-		assert.Equal(t, uint8(0x05), data[3])
-		assert.Equal(t, []byte{0xDE, 0xAD, 0xBE, 0xEF}, data[4:8])
-		assert.Equal(t, []byte{0xCA, 0xFE, 0xBA, 0xBE}, data[8:12])
+		if data[0] != uint8(0xc1) {
+			t.Errorf("got %v, want %v", data[0], uint8(0xc1))
+		}
+		if data[1] != uint8(0x02) {
+			t.Errorf("got %v, want %v", data[1], uint8(0x02))
+		}
+		if data[2] != uint8(0x05) {
+			t.Errorf("got %v, want %v", data[2], uint8(0x05))
+		}
+		if data[3] != uint8(0x05) {
+			t.Errorf("got %v, want %v", data[3], uint8(0x05))
+		}
+		if !bytes.Equal(data[4:8], []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+			t.Errorf("got %v, want %v", data[4:8], []byte{0xDE, 0xAD, 0xBE, 0xEF})
+		}
+		if !bytes.Equal(data[8:12], []byte{0xCA, 0xFE, 0xBA, 0xBE}) {
+			t.Errorf("got %v, want %v", data[8:12], []byte{0xCA, 0xFE, 0xBA, 0xBE})
+		}
 	})
 
 	t.Run("max values", func(t *testing.T) {
@@ -92,10 +142,14 @@ func TestHeaderMarshalBinary(t *testing.T) {
 		}
 
 		data, err := h.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		for i := range HeaderLength {
-			assert.Equal(t, uint8(0xFF), data[i])
+			if data[i] != uint8(0xFF) {
+				t.Errorf("got %v, want %v", data[i], uint8(0xFF))
+			}
 		}
 	})
 }
@@ -106,14 +160,28 @@ func TestHeaderUnmarshalBinary(t *testing.T) {
 
 		h := &Header{}
 		err := h.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint8(0xc0), h.Version)
-		assert.Equal(t, uint8(0x01), h.Type)
-		assert.Equal(t, uint8(0x01), h.SeqNo)
-		assert.Equal(t, uint8(0x00), h.Flags)
-		assert.Equal(t, uint32(0x12345678), h.SessionID)
-		assert.Equal(t, uint32(0x00000100), h.Length)
+		if h.Version != uint8(0xc0) {
+			t.Errorf("got %v, want %v", h.Version, uint8(0xc0))
+		}
+		if h.Type != uint8(0x01) {
+			t.Errorf("got %v, want %v", h.Type, uint8(0x01))
+		}
+		if h.SeqNo != uint8(0x01) {
+			t.Errorf("got %v, want %v", h.SeqNo, uint8(0x01))
+		}
+		if h.Flags != uint8(0x00) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
+		}
+		if h.SessionID != uint32(0x12345678) {
+			t.Errorf("got %v, want %v", h.SessionID, uint32(0x12345678))
+		}
+		if h.Length != uint32(0x00000100) {
+			t.Errorf("got %v, want %v", h.Length, uint32(0x00000100))
+		}
 	})
 
 	t.Run("buffer too short", func(t *testing.T) {
@@ -130,8 +198,12 @@ func TestHeaderUnmarshalBinary(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				h := &Header{}
 				err := h.UnmarshalBinary(tc.data)
-				assert.Error(t, err)
-				assert.True(t, errors.Is(err, ErrBufferTooShort))
+				if err == nil {
+					t.Errorf("expected an error")
+				}
+				if !errors.Is(err, ErrBufferTooShort) {
+					t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+				}
 			})
 		}
 	})
@@ -141,9 +213,13 @@ func TestHeaderUnmarshalBinary(t *testing.T) {
 
 		h := &Header{}
 		err := h.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint32(0x00000100), h.Length)
+		if h.Length != uint32(0x00000100) {
+			t.Errorf("got %v, want %v", h.Length, uint32(0x00000100))
+		}
 	})
 }
 
@@ -201,18 +277,34 @@ func TestHeaderMarshalUnmarshalRoundtrip(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := tc.header.MarshalBinary()
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			decoded := &Header{}
 			err = decoded.UnmarshalBinary(data)
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			assert.Equal(t, tc.header.Version, decoded.Version)
-			assert.Equal(t, tc.header.Type, decoded.Type)
-			assert.Equal(t, tc.header.SeqNo, decoded.SeqNo)
-			assert.Equal(t, tc.header.Flags, decoded.Flags)
-			assert.Equal(t, tc.header.SessionID, decoded.SessionID)
-			assert.Equal(t, tc.header.Length, decoded.Length)
+			if decoded.Version != tc.header.Version {
+				t.Errorf("got %v, want %v", decoded.Version, tc.header.Version)
+			}
+			if decoded.Type != tc.header.Type {
+				t.Errorf("got %v, want %v", decoded.Type, tc.header.Type)
+			}
+			if decoded.SeqNo != tc.header.SeqNo {
+				t.Errorf("got %v, want %v", decoded.SeqNo, tc.header.SeqNo)
+			}
+			if decoded.Flags != tc.header.Flags {
+				t.Errorf("got %v, want %v", decoded.Flags, tc.header.Flags)
+			}
+			if decoded.SessionID != tc.header.SessionID {
+				t.Errorf("got %v, want %v", decoded.SessionID, tc.header.SessionID)
+			}
+			if decoded.Length != tc.header.Length {
+				t.Errorf("got %v, want %v", decoded.Length, tc.header.Length)
+			}
 		})
 	}
 }
@@ -228,7 +320,9 @@ func TestHeaderValidate(t *testing.T) {
 
 		for _, h := range validHeaders {
 			err := h.Validate()
-			assert.NoError(t, err)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
 		}
 	})
 
@@ -238,8 +332,12 @@ func TestHeaderValidate(t *testing.T) {
 		for _, v := range invalidVersions {
 			h := &Header{Version: v, Type: PacketTypeAuthen, SeqNo: 1}
 			err := h.Validate()
-			assert.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidVersion))
+			if err == nil {
+				t.Errorf("expected an error")
+			}
+			if !errors.Is(err, ErrInvalidVersion) {
+				t.Errorf("error %v is not %v", err, ErrInvalidVersion)
+			}
 		}
 	})
 
@@ -249,8 +347,12 @@ func TestHeaderValidate(t *testing.T) {
 		for _, v := range invalidMinorVersions {
 			h := &Header{Version: v, Type: PacketTypeAuthen, SeqNo: 1}
 			err := h.Validate()
-			assert.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidVersion))
+			if err == nil {
+				t.Errorf("expected an error")
+			}
+			if !errors.Is(err, ErrInvalidVersion) {
+				t.Errorf("error %v is not %v", err, ErrInvalidVersion)
+			}
 		}
 	})
 
@@ -260,16 +362,24 @@ func TestHeaderValidate(t *testing.T) {
 		for _, pt := range invalidTypes {
 			h := &Header{Version: 0xc0, Type: pt, SeqNo: 1}
 			err := h.Validate()
-			assert.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidType))
+			if err == nil {
+				t.Errorf("expected an error")
+			}
+			if !errors.Is(err, ErrInvalidType) {
+				t.Errorf("error %v is not %v", err, ErrInvalidType)
+			}
 		}
 	})
 
 	t.Run("invalid sequence number zero", func(t *testing.T) {
 		h := &Header{Version: 0xc0, Type: PacketTypeAuthen, SeqNo: 0}
 		err := h.Validate()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 }
 
@@ -288,7 +398,9 @@ func TestHeaderVersionMethods(t *testing.T) {
 
 		for _, tc := range testCases {
 			h := &Header{Version: tc.version}
-			assert.Equal(t, tc.major, h.MajorVersionNumber())
+			if got := h.MajorVersionNumber(); got != tc.major {
+				t.Errorf("got %v, want %v", got, tc.major)
+			}
 		}
 	})
 
@@ -306,7 +418,9 @@ func TestHeaderVersionMethods(t *testing.T) {
 
 		for _, tc := range testCases {
 			h := &Header{Version: tc.version}
-			assert.Equal(t, tc.minor, h.MinorVersionNumber())
+			if got := h.MinorVersionNumber(); got != tc.minor {
+				t.Errorf("got %v, want %v", got, tc.minor)
+			}
 		}
 	})
 }
@@ -326,7 +440,9 @@ func TestHeaderFlagMethods(t *testing.T) {
 
 		for _, tc := range testCases {
 			h := &Header{Flags: tc.flags}
-			assert.Equal(t, tc.unencrypted, h.IsUnencrypted())
+			if got := h.IsUnencrypted(); got != tc.unencrypted {
+				t.Errorf("got %v, want %v", got, tc.unencrypted)
+			}
 		}
 	})
 
@@ -344,7 +460,9 @@ func TestHeaderFlagMethods(t *testing.T) {
 
 		for _, tc := range testCases {
 			h := &Header{Flags: tc.flags}
-			assert.Equal(t, tc.singleConnect, h.IsSingleConnect())
+			if got := h.IsSingleConnect(); got != tc.singleConnect {
+				t.Errorf("got %v, want %v", got, tc.singleConnect)
+			}
 		}
 	})
 
@@ -352,38 +470,66 @@ func TestHeaderFlagMethods(t *testing.T) {
 		h := &Header{Flags: 0x00}
 
 		h.SetUnencrypted(true)
-		assert.True(t, h.IsUnencrypted())
-		assert.Equal(t, uint8(0x01), h.Flags)
+		if !h.IsUnencrypted() {
+			t.Errorf("expected true")
+		}
+		if h.Flags != uint8(0x01) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x01))
+		}
 
 		h.SetUnencrypted(false)
-		assert.False(t, h.IsUnencrypted())
-		assert.Equal(t, uint8(0x00), h.Flags)
+		if h.IsUnencrypted() {
+			t.Errorf("expected false")
+		}
+		if h.Flags != uint8(0x00) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
+		}
 	})
 
 	t.Run("set single connect", func(t *testing.T) {
 		h := &Header{Flags: 0x00}
 
 		h.SetSingleConnect(true)
-		assert.True(t, h.IsSingleConnect())
-		assert.Equal(t, uint8(0x04), h.Flags)
+		if !h.IsSingleConnect() {
+			t.Errorf("expected true")
+		}
+		if h.Flags != uint8(0x04) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x04))
+		}
 
 		h.SetSingleConnect(false)
-		assert.False(t, h.IsSingleConnect())
-		assert.Equal(t, uint8(0x00), h.Flags)
+		if h.IsSingleConnect() {
+			t.Errorf("expected false")
+		}
+		if h.Flags != uint8(0x00) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x00))
+		}
 	})
 
 	t.Run("set flags preserves other flags", func(t *testing.T) {
 		h := &Header{Flags: FlagSingleConnect}
 
 		h.SetUnencrypted(true)
-		assert.True(t, h.IsUnencrypted())
-		assert.True(t, h.IsSingleConnect())
-		assert.Equal(t, uint8(0x05), h.Flags)
+		if !h.IsUnencrypted() {
+			t.Errorf("expected true")
+		}
+		if !h.IsSingleConnect() {
+			t.Errorf("expected true")
+		}
+		if h.Flags != uint8(0x05) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x05))
+		}
 
 		h.SetUnencrypted(false)
-		assert.False(t, h.IsUnencrypted())
-		assert.True(t, h.IsSingleConnect())
-		assert.Equal(t, uint8(0x04), h.Flags)
+		if h.IsUnencrypted() {
+			t.Errorf("expected false")
+		}
+		if !h.IsSingleConnect() {
+			t.Errorf("expected true")
+		}
+		if h.Flags != uint8(0x04) {
+			t.Errorf("got %v, want %v", h.Flags, uint8(0x04))
+		}
 	})
 }
 
@@ -391,12 +537,18 @@ func TestHeaderBoundaryConditions(t *testing.T) {
 	t.Run("max session ID", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthen, 0xFFFFFFFF)
 		data, err := h.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		decoded := &Header{}
 		err = decoded.UnmarshalBinary(data)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0xFFFFFFFF), decoded.SessionID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if decoded.SessionID != uint32(0xFFFFFFFF) {
+			t.Errorf("got %v, want %v", decoded.SessionID, uint32(0xFFFFFFFF))
+		}
 	})
 
 	t.Run("max length", func(t *testing.T) {
@@ -408,12 +560,18 @@ func TestHeaderBoundaryConditions(t *testing.T) {
 		}
 
 		data, err := h.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		decoded := &Header{}
 		err = decoded.UnmarshalBinary(data)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0xFFFFFFFF), decoded.Length)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if decoded.Length != uint32(0xFFFFFFFF) {
+			t.Errorf("got %v, want %v", decoded.Length, uint32(0xFFFFFFFF))
+		}
 	})
 
 	t.Run("max sequence number", func(t *testing.T) {
@@ -424,7 +582,9 @@ func TestHeaderBoundaryConditions(t *testing.T) {
 		}
 
 		err := h.Validate()
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 }
 

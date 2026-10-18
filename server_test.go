@@ -1,18 +1,18 @@
 package gotacacs
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"io"
 	"net"
+	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // sendInvalidPacketAndGetResponse sends an invalid packet to the server and returns the response body
@@ -20,7 +20,9 @@ func sendInvalidPacketAndGetResponse(t *testing.T, addr string, packetType uint8
 	t.Helper()
 
 	conn, err := net.Dial("tcp", addr)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	defer conn.Close()
 
 	header := &Header{
@@ -61,8 +63,12 @@ func TestSecretProvider(t *testing.T) {
 			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
 		}
 		resp := provider.GetSecret(context.Background(), req)
-		assert.Equal(t, secret, resp.Secret)
-		assert.Nil(t, resp.UserData)
+		if !bytes.Equal(resp.Secret, secret) {
+			t.Errorf("got %v, want %v", resp.Secret, secret)
+		}
+		if resp.UserData != nil {
+			t.Errorf("expected nil, got %v", resp.UserData)
+		}
 	})
 
 	t.Run("secret provider func", func(t *testing.T) {
@@ -86,12 +92,22 @@ func TestSecretProvider(t *testing.T) {
 		}
 
 		resp1 := provider.GetSecret(context.Background(), req1)
-		assert.Equal(t, []byte("secret1"), resp1.Secret)
-		assert.Equal(t, map[string]string{"client": "client1"}, resp1.UserData)
+		tv89_1 := []byte("secret1")
+		if !bytes.Equal(resp1.Secret, tv89_1) {
+			t.Errorf("got %v, want %v", resp1.Secret, tv89_1)
+		}
+		if !reflect.DeepEqual(resp1.UserData, map[string]string{"client": "client1"}) {
+			t.Errorf("got %v, want %v", resp1.UserData, map[string]string{"client": "client1"})
+		}
 
 		resp2 := provider.GetSecret(context.Background(), req2)
-		assert.Equal(t, []byte("default"), resp2.Secret)
-		assert.Nil(t, resp2.UserData)
+		tv93_1 := []byte("default")
+		if !bytes.Equal(resp2.Secret, tv93_1) {
+			t.Errorf("got %v, want %v", resp2.Secret, tv93_1)
+		}
+		if resp2.UserData != nil {
+			t.Errorf("expected nil, got %v", resp2.UserData)
+		}
 	})
 
 	t.Run("secret provider with user data", func(t *testing.T) {
@@ -110,9 +126,16 @@ func TestSecretProvider(t *testing.T) {
 			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 49},
 		}
 		resp := provider.GetSecret(context.Background(), req)
-		assert.Equal(t, []byte("secret"), resp.Secret)
-		assert.Equal(t, "router1", resp.UserData["client_name"])
-		assert.Equal(t, "network", resp.UserData["client_type"])
+		tv113_1 := []byte("secret")
+		if !bytes.Equal(resp.Secret, tv113_1) {
+			t.Errorf("got %v, want %v", resp.Secret, tv113_1)
+		}
+		if resp.UserData["client_name"] != "router1" {
+			t.Errorf("got %v, want %v", resp.UserData["client_name"], "router1")
+		}
+		if resp.UserData["client_type"] != "network" {
+			t.Errorf("got %v, want %v", resp.UserData["client_type"], "network")
+		}
 	})
 
 	t.Run("secret provider with local addr", func(t *testing.T) {
@@ -131,29 +154,47 @@ func TestSecretProvider(t *testing.T) {
 			LocalAddr:  &net.TCPAddr{IP: net.ParseIP("10.0.0.1"), Port: 49},
 		}
 		resp := provider.GetSecret(context.Background(), req)
-		assert.Equal(t, "192.168.1.100:12345", resp.UserData["remote"])
-		assert.Equal(t, "10.0.0.1:49", resp.UserData["local"])
+		if resp.UserData["remote"] != "192.168.1.100:12345" {
+			t.Errorf("got %v, want %v", resp.UserData["remote"], "192.168.1.100:12345")
+		}
+		if resp.UserData["local"] != "10.0.0.1:49" {
+			t.Errorf("got %v, want %v", resp.UserData["local"], "10.0.0.1:49")
+		}
 	})
 }
 
 func TestServerOptions(t *testing.T) {
 	t.Run("default values", func(t *testing.T) {
 		server := NewServer()
-		assert.NotNil(t, server)
-		assert.Nil(t, server.listener)
-		assert.Nil(t, server.secretProvider)
-		assert.Equal(t, 30*time.Second, server.readTimeout)
-		assert.Equal(t, 30*time.Second, server.writeTimeout)
+		if server == nil {
+			t.Error("expected non-nil")
+		}
+		if server.listener != nil {
+			t.Errorf("expected nil, got %v", server.listener)
+		}
+		if server.secretProvider != nil {
+			t.Errorf("expected nil, got %v", server.secretProvider)
+		}
+		if server.readTimeout != 30*time.Second {
+			t.Errorf("got %v, want %v", server.readTimeout, 30*time.Second)
+		}
+		if server.writeTimeout != 30*time.Second {
+			t.Errorf("got %v, want %v", server.writeTimeout, 30*time.Second)
+		}
 	})
 
 	t.Run("with secret", func(t *testing.T) {
 		server := NewServer(WithServerSecret("testsecret"))
-		assert.NotNil(t, server.secretProvider)
+		if server.secretProvider == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("with secret bytes", func(t *testing.T) {
 		server := NewServer(WithServerSecretBytes([]byte{0x01, 0x02, 0x03}))
-		assert.NotNil(t, server.secretProvider)
+		if server.secretProvider == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("with secret provider", func(t *testing.T) {
@@ -161,7 +202,9 @@ func TestServerOptions(t *testing.T) {
 			return SecretResponse{Secret: []byte("test")}
 		})
 		server := NewServer(WithSecretProvider(provider))
-		assert.NotNil(t, server.secretProvider)
+		if server.secretProvider == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("with timeouts", func(t *testing.T) {
@@ -169,27 +212,40 @@ func TestServerOptions(t *testing.T) {
 			WithServerReadTimeout(10*time.Second),
 			WithServerWriteTimeout(15*time.Second),
 		)
-		assert.Equal(t, 10*time.Second, server.readTimeout)
-		assert.Equal(t, 15*time.Second, server.writeTimeout)
+		if server.readTimeout != 10*time.Second {
+			t.Errorf("got %v, want %v", server.readTimeout, 10*time.Second)
+		}
+		if server.writeTimeout != 15*time.Second {
+			t.Errorf("got %v, want %v", server.writeTimeout, 15*time.Second)
+		}
 	})
 
 	t.Run("with listener", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		server := NewServer(WithServerListener(ln))
-		assert.Equal(t, ln, server.listener)
+		if server.listener != ln {
+			t.Errorf("got %v, want %v", server.listener, ln)
+		}
 	})
 
 	t.Run("with max body length", func(t *testing.T) {
 		server := NewServer(WithServerMaxBodyLength(2048))
-		assert.Equal(t, uint32(2048), server.maxBodyLength)
+		tv187_1 := uint32(2048)
+		if server.maxBodyLength != tv187_1 {
+			t.Errorf("got %v, want %v", server.maxBodyLength, tv187_1)
+		}
 	})
 
 	t.Run("with secret bytes used in connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -203,8 +259,13 @@ func TestServerOptions(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv207_1 := reply.IsPass()
+		if !tv207_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -215,7 +276,9 @@ func TestServerHandlerOptions(t *testing.T) {
 		})
 
 		server := NewServer(WithAuthenticationHandler(handler))
-		assert.NotNil(t, server.authenHandler)
+		if server.authenHandler == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("with authorization handler", func(t *testing.T) {
@@ -224,7 +287,9 @@ func TestServerHandlerOptions(t *testing.T) {
 		})
 
 		server := NewServer(WithAuthorizationHandler(handler))
-		assert.NotNil(t, server.authorHandler)
+		if server.authorHandler == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("with accounting handler", func(t *testing.T) {
@@ -233,7 +298,9 @@ func TestServerHandlerOptions(t *testing.T) {
 		})
 
 		server := NewServer(WithAccountingHandler(handler))
-		assert.NotNil(t, server.acctHandler)
+		if server.acctHandler == nil {
+			t.Error("expected non-nil")
+		}
 	})
 }
 
@@ -262,7 +329,9 @@ func TestWithServerSecretBytesCopy(t *testing.T) {
 	t.Run("mutation after creation does not affect server", func(t *testing.T) {
 		secret := []byte("original")
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -275,7 +344,10 @@ func TestWithServerSecretBytesCopy(t *testing.T) {
 
 		// Verify the server's secret provider returns the original value
 		resp := server.secretProvider.GetSecret(context.Background(), SecretRequest{})
-		assert.Equal(t, []byte("original"), resp.Secret)
+		tv278_1 := []byte("original")
+		if !bytes.Equal(resp.Secret, tv278_1) {
+			t.Errorf("got %v, want %v", resp.Secret, tv278_1)
+		}
 		server.Shutdown(context.Background())
 	})
 }
@@ -285,9 +357,15 @@ func TestServerWithHandler(t *testing.T) {
 		handler := &testHandler{}
 		server := NewServer(WithHandler(handler))
 
-		assert.Equal(t, handler, server.authenHandler)
-		assert.Equal(t, handler, server.authorHandler)
-		assert.Equal(t, handler, server.acctHandler)
+		if server.authenHandler != handler {
+			t.Errorf("got %v, want %v", server.authenHandler, handler)
+		}
+		if server.authorHandler != handler {
+			t.Errorf("got %v, want %v", server.authorHandler, handler)
+		}
+		if server.acctHandler != handler {
+			t.Errorf("got %v, want %v", server.acctHandler, handler)
+		}
 	})
 }
 
@@ -298,7 +376,10 @@ func TestHandlerFuncAdapters(t *testing.T) {
 		})
 
 		reply := handler.HandleAuthenContinue(context.Background(), nil)
-		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
+		tv301_1 := uint8(AuthenStatusError)
+		if reply.Status != tv301_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv301_1)
+		}
 	})
 }
 
@@ -306,13 +387,20 @@ func TestServerServe(t *testing.T) {
 	t.Run("serve without listener", func(t *testing.T) {
 		server := NewServer()
 		err := server.Serve()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no listener")
+		if err == nil {
+			t.Error("expected an error")
+		}
+		tv310_1 := err.Error()
+		if !strings.Contains(tv310_1, "no listener") {
+			t.Errorf("%q does not contain %q", tv310_1, "no listener")
+		}
 	})
 
 	t.Run("serve already running", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(WithServerListener(ln))
 
@@ -326,8 +414,13 @@ func TestServerServe(t *testing.T) {
 
 		// Try to start again
 		err = server.Serve()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "already running")
+		if err == nil {
+			t.Error("expected an error")
+		}
+		tv330_1 := err.Error()
+		if !strings.Contains(tv330_1, "already running") {
+			t.Errorf("%q does not contain %q", tv330_1, "already running")
+		}
 
 		server.Shutdown(context.Background())
 	})
@@ -337,12 +430,16 @@ func TestServerShutdown(t *testing.T) {
 	t.Run("shutdown when not running", func(t *testing.T) {
 		server := NewServer()
 		err := server.Shutdown(context.Background())
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 
 	t.Run("graceful shutdown", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(WithServerListener(ln))
 
@@ -356,15 +453,22 @@ func TestServerShutdown(t *testing.T) {
 		defer cancel()
 
 		err = server.Shutdown(ctx)
-		assert.NoError(t, err)
-		assert.False(t, server.IsRunning())
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		tv360_1 := server.IsRunning()
+		if tv360_1 {
+			t.Error("expected false")
+		}
 	})
 }
 
 func TestServerServeAcceptErrorResetsRunning(t *testing.T) {
 	t.Run("accept error resets running state", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(WithServerListener(ln), WithHandler(&testHandler{}))
 
@@ -372,14 +476,21 @@ func TestServerServeAcceptErrorResetsRunning(t *testing.T) {
 		ln.Close()
 
 		err = server.Serve()
-		assert.Error(t, err)
-		assert.False(t, server.IsRunning())
+		if err == nil {
+			t.Error("expected an error")
+		}
+		tv376_1 := server.IsRunning()
+		if tv376_1 {
+			t.Error("expected false")
+		}
 	})
 }
 
 func TestServerAcceptErrorClosesActiveConnections(t *testing.T) {
 	ln, err := ListenTCP("127.0.0.1:0")
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	server := NewServer(WithServerListener(ln), WithServerReadTimeout(10*time.Second))
 
 	serveDone := make(chan error, 1)
@@ -388,38 +499,73 @@ func TestServerAcceptErrorClosesActiveConnections(t *testing.T) {
 	}()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	defer conn.Close()
-	require.Eventually(t, func() bool {
-		active := false
-		server.activeConns.Range(func(_, _ any) bool {
-			active = true
-			return false
-		})
-		return active
-	}, time.Second, 5*time.Millisecond)
+	{
+		deadline := time.Now().Add(time.Second)
+		cond := func() bool {
+			active := false
+			server.activeConns.Range(func(_, _ any) bool {
+				active = true
+				return false
+			})
+			return active
+		}
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal("condition not met")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 
-	require.NoError(t, ln.Close())
-	require.Error(t, <-serveDone)
+	tv402_1 := ln.Close()
+	if tv402_1 != nil {
+		t.Fatalf("unexpected error: %v", tv402_1)
+	}
+	if <-serveDone == nil {
+		t.Fatal("expected an error")
+	}
 
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	tv405_1 := conn.SetReadDeadline(time.Now().Add(time.Second))
+	if tv405_1 != nil {
+		t.Fatalf("unexpected error: %v", tv405_1)
+	}
 	_, err = conn.Read(make([]byte, 1))
-	require.Error(t, err)
-	require.Eventually(t, func() bool {
-		active := false
-		server.activeConns.Range(func(_, _ any) bool {
-			active = true
-			return false
-		})
-		return !active
-	}, time.Second, 5*time.Millisecond)
-	require.NoError(t, server.Shutdown(context.Background()))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	{
+		deadline := time.Now().Add(time.Second)
+		cond := func() bool {
+			active := false
+			server.activeConns.Range(func(_, _ any) bool {
+				active = true
+				return false
+			})
+			return !active
+		}
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal("condition not met")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	tv416_1 := server.Shutdown(context.Background())
+	if tv416_1 != nil {
+		t.Fatalf("unexpected error: %v", tv416_1)
+	}
 }
 
 func TestServerRestart(t *testing.T) {
 	t.Run("server can be restarted after shutdown", func(t *testing.T) {
 		ln1, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(WithServerListener(ln1), WithServerSecret("test"), WithHandler(&testHandler{}))
 
@@ -428,15 +574,22 @@ func TestServerRestart(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		err = server.Shutdown(context.Background())
-		assert.NoError(t, err)
-		assert.False(t, server.IsRunning())
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		tv432_1 := server.IsRunning()
+		if tv432_1 {
+			t.Error("expected false")
+		}
 
 		// Wait for Serve goroutine to fully exit
 		<-serveDone
 
 		// Restart with new listener
 		ln2, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server.mu.Lock()
 		server.listener = ln2
@@ -445,12 +598,20 @@ func TestServerRestart(t *testing.T) {
 		go func() { server.Serve() }()
 		time.Sleep(50 * time.Millisecond)
 
-		assert.True(t, server.IsRunning())
+		tv448_1 := server.IsRunning()
+		if !tv448_1 {
+			t.Error("expected true")
+		}
 
 		client := NewClient(WithAddress(ln2.Addr().String()), WithSecret("test"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "pass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv453_1 := reply.IsPass()
+		if !tv453_1 {
+			t.Error("expected true")
+		}
 
 		server.Shutdown(context.Background())
 	})
@@ -459,7 +620,9 @@ func TestServerRestart(t *testing.T) {
 func TestServerShutdownForcesClose(t *testing.T) {
 	t.Run("expired context forces connection close", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Handler that simulates slow cleanup after receiving shutdown signal
 		handlerStarted := make(chan struct{})
@@ -496,13 +659,20 @@ func TestServerShutdownForcesClose(t *testing.T) {
 		defer cancel()
 
 		err = server.Shutdown(ctx)
-		assert.ErrorIs(t, err, context.DeadlineExceeded)
-		assert.False(t, server.IsRunning())
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error %v is not %v", err, context.DeadlineExceeded)
+		}
+		tv500_1 := server.IsRunning()
+		if tv500_1 {
+			t.Error("expected false")
+		}
 	})
 
 	t.Run("expired context returns even when handler ignores shutdown", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handlerStarted := make(chan struct{})
 		blockHandler := make(chan struct{})
@@ -542,8 +712,13 @@ func TestServerShutdownForcesClose(t *testing.T) {
 
 		select {
 		case err := <-shutdownDone:
-			assert.ErrorIs(t, err, context.DeadlineExceeded)
-			assert.Less(t, time.Since(started), 500*time.Millisecond)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("error %v is not %v", err, context.DeadlineExceeded)
+			}
+			tv546_1 := time.Since(started)
+			if tv546_1 >= 500*time.Millisecond {
+				t.Errorf("expected %v < %v", tv546_1, 500*time.Millisecond)
+			}
 		case <-time.After(500 * time.Millisecond):
 			close(blockHandler)
 			t.Fatal("Shutdown did not return after context deadline")
@@ -551,14 +726,19 @@ func TestServerShutdownForcesClose(t *testing.T) {
 
 		close(blockHandler)
 		<-clientDone
-		assert.False(t, server.IsRunning())
+		tv554_1 := server.IsRunning()
+		if tv554_1 {
+			t.Error("expected false")
+		}
 	})
 }
 
 func TestServerHandlerReceivesShutdownContext(t *testing.T) {
 	t.Run("handler context is cancelled on shutdown", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		ctxDone := make(chan struct{})
 		handler := AuthenHandlerFunc(func(ctx context.Context, _ *AuthenRequest) *AuthenReply {
@@ -600,23 +780,33 @@ func TestServerHandlerReceivesShutdownContext(t *testing.T) {
 func TestServerAddr(t *testing.T) {
 	t.Run("addr without listener", func(t *testing.T) {
 		server := NewServer()
-		assert.Nil(t, server.Addr())
+		tv603_1 := server.Addr()
+		if tv603_1 != nil {
+			t.Errorf("expected nil, got %v", tv603_1)
+		}
 	})
 
 	t.Run("addr with listener", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		server := NewServer(WithServerListener(ln))
-		assert.NotNil(t, server.Addr())
+		tv612_1 := server.Addr()
+		if tv612_1 == nil {
+			t.Error("expected non-nil")
+		}
 	})
 }
 
 func TestServerAuthentication(t *testing.T) {
 	t.Run("authentication success", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -634,13 +824,20 @@ func TestServerAuthentication(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv638_1 := reply.IsPass()
+		if !tv638_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("authentication failure", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -658,15 +855,22 @@ func TestServerAuthentication(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "wronguser", "testpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsFail())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv662_1 := reply.IsFail()
+		if !tv662_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerAuthorization(t *testing.T) {
 	t.Run("authorization success", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -684,16 +888,32 @@ func TestServerAuthorization(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.True(t, resp.IsPass())
-		assert.Contains(t, resp.Args(), "priv-lvl=15")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv688_1 := resp.IsPass()
+		if !tv688_1 {
+			t.Error("expected true")
+		}
+		found := false
+		for _, a := range resp.Args() {
+			if a == "priv-lvl=15" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("args %v do not contain %q", resp.Args(), "priv-lvl=15")
+		}
 	})
 }
 
 func TestServerAccounting(t *testing.T) {
 	t.Run("accounting success", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -712,15 +932,22 @@ func TestServerAccounting(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
-		require.NoError(t, err)
-		assert.True(t, reply.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv716_1 := reply.IsSuccess()
+		if !tv716_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerNoHandler(t *testing.T) {
 	t.Run("no authentication handler", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -736,13 +963,20 @@ func TestServerNoHandler(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv740_1 := uint8(AuthenStatusError)
+		if reply.Status != tv740_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv740_1)
+		}
 	})
 
 	t.Run("no authorization handler", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -758,13 +992,20 @@ func TestServerNoHandler(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv762_1 := uint8(AuthorStatusError)
+		if resp.Status != tv762_1 {
+			t.Errorf("got %v, want %v", resp.Status, tv762_1)
+		}
 	})
 
 	t.Run("no accounting handler", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -780,15 +1021,22 @@ func TestServerNoHandler(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv784_1 := uint8(AcctStatusError)
+		if reply.Status != tv784_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv784_1)
+		}
 	})
 }
 
 func TestServerSingleConnect(t *testing.T) {
 	t.Run("single connect mode", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -804,7 +1052,8 @@ func TestServerSingleConnect(t *testing.T) {
 
 		time.Sleep(50 * time.Millisecond)
 
-		client := NewClient(WithAddress(ln.Addr().String()),
+		client := NewClient(
+			WithAddress(ln.Addr().String()),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
 		)
@@ -813,8 +1062,13 @@ func TestServerSingleConnect(t *testing.T) {
 		// Multiple requests on same connection
 		for range 3 {
 			reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-			require.NoError(t, err)
-			assert.True(t, reply.IsPass())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tv817_1 := reply.IsPass()
+			if !tv817_1 {
+				t.Error("expected true")
+			}
 		}
 	})
 }
@@ -822,7 +1076,9 @@ func TestServerSingleConnect(t *testing.T) {
 func TestServerInvalidPacket(t *testing.T) {
 	t.Run("invalid authentication packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -840,7 +1096,9 @@ func TestServerInvalidPacket(t *testing.T) {
 
 		// Connect and send invalid packet
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		secret := []byte("testsecret")
@@ -866,7 +1124,9 @@ func TestServerInvalidPacket(t *testing.T) {
 		// Read response
 		respHeaderBuf := make([]byte, HeaderLength)
 		_, err = io.ReadFull(conn, respHeaderBuf)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		respHeader := &Header{}
 		respHeader.UnmarshalBinary(respHeaderBuf)
@@ -879,14 +1139,19 @@ func TestServerInvalidPacket(t *testing.T) {
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(respBody)
 
-		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
+		tv882_1 := uint8(AuthenStatusError)
+		if reply.Status != tv882_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv882_1)
+		}
 	})
 }
 
 func TestServerConnectionClose(t *testing.T) {
 	t.Run("client closes connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &testHandler{}
 		server := NewServer(
@@ -903,19 +1168,26 @@ func TestServerConnectionClose(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		conn.Close()
 
 		// Server should handle close gracefully
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, server.IsRunning())
+		tv911_1 := server.IsRunning()
+		if !tv911_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerHandlerNilReply(t *testing.T) {
 	t.Run("handler returns nil for authentication", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		nilHandler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 			return nil
@@ -936,13 +1208,20 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv940_1 := uint8(AuthenStatusError)
+		if reply.Status != tv940_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv940_1)
+		}
 	})
 
 	t.Run("handler returns nil for authorization", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		nilHandler := AuthorHandlerFunc(func(_ context.Context, _ *AuthorRequestContext) *AuthorResponse {
 			return nil
@@ -963,13 +1242,20 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{})
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv967_1 := uint8(AuthorStatusError)
+		if resp.Status != tv967_1 {
+			t.Errorf("got %v, want %v", resp.Status, tv967_1)
+		}
 	})
 
 	t.Run("handler returns nil for accounting", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		nilHandler := AcctHandlerFunc(func(_ context.Context, _ *AcctRequestContext) *AcctReply {
 			return nil
@@ -990,8 +1276,13 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		require.NoError(t, err)
-		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv994_1 := uint8(AcctStatusError)
+		if reply.Status != tv994_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv994_1)
+		}
 	})
 }
 
@@ -999,7 +1290,9 @@ func TestServerSessionState(t *testing.T) {
 	runSessionStateTest := func(t *testing.T, setupServer func(ln Listener) *Server, runClient func(client *Client) error) {
 		t.Helper()
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := setupServer(ln)
 		go func() { server.Serve() }()
@@ -1007,10 +1300,16 @@ func TestServerSessionState(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
-		require.NoError(t, runClient(client))
+		tv1010_1 := runClient(client)
+		if tv1010_1 != nil {
+			t.Fatalf("unexpected error: %v", tv1010_1)
+		}
 
 		time.Sleep(10 * time.Millisecond)
-		assert.Empty(t, server.Sessions(), "session should be cleaned up")
+		tv1013_1 := server.Sessions()
+		if len(tv1013_1) != 0 {
+			t.Errorf("expected empty, got %v", tv1013_1)
+		}
 	}
 
 	t.Run("authentication pass", func(t *testing.T) {
@@ -1024,7 +1323,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 				if err == nil {
-					assert.True(t, reply.IsPass())
+					tv1027_1 := reply.IsPass()
+					if !tv1027_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1041,7 +1343,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 				if err == nil {
-					assert.True(t, reply.IsFail())
+					tv1044_1 := reply.IsFail()
+					if !tv1044_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1058,7 +1363,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
 				if err == nil {
-					assert.True(t, resp.IsPass())
+					tv1061_1 := resp.IsPass()
+					if !tv1061_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1075,7 +1383,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
 				if err == nil {
-					assert.True(t, resp.IsFail())
+					tv1078_1 := resp.IsFail()
+					if !tv1078_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1092,7 +1403,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
-					assert.True(t, reply.IsSuccess())
+					tv1095_1 := reply.IsSuccess()
+					if !tv1095_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1109,7 +1423,10 @@ func TestServerSessionState(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
-					assert.True(t, reply.IsError())
+					tv1112_1 := reply.IsError()
+					if !tv1112_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			})
@@ -1120,7 +1437,9 @@ func TestServerUserDataPassing(t *testing.T) {
 	runUserDataTest := func(t *testing.T, expectedUserData map[string]string, setupServer func(ln Listener, provider SecretProvider) *Server, runClient func(client *Client) error, getReceived func() map[string]string) {
 		t.Helper()
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		secretProvider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
 			return SecretResponse{Secret: []byte("testsecret"), UserData: expectedUserData}
@@ -1132,8 +1451,14 @@ func TestServerUserDataPassing(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
-		require.NoError(t, runClient(client))
-		assert.Equal(t, expectedUserData, getReceived())
+		tv1135_1 := runClient(client)
+		if tv1135_1 != nil {
+			t.Fatalf("unexpected error: %v", tv1135_1)
+		}
+		tv1136_1 := getReceived()
+		if !reflect.DeepEqual(tv1136_1, expectedUserData) {
+			t.Errorf("got %v, want %v", tv1136_1, expectedUserData)
+		}
 	}
 
 	t.Run("user data passed to authentication handler", func(t *testing.T) {
@@ -1150,7 +1475,10 @@ func TestServerUserDataPassing(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 				if err == nil {
-					assert.True(t, reply.IsPass())
+					tv1153_1 := reply.IsPass()
+					if !tv1153_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			},
@@ -1171,7 +1499,10 @@ func TestServerUserDataPassing(t *testing.T) {
 			func(client *Client) error {
 				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
 				if err == nil {
-					assert.True(t, resp.IsPass())
+					tv1174_1 := resp.IsPass()
+					if !tv1174_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			},
@@ -1192,7 +1523,10 @@ func TestServerUserDataPassing(t *testing.T) {
 			func(client *Client) error {
 				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
 				if err == nil {
-					assert.True(t, reply.IsSuccess())
+					tv1195_1 := reply.IsSuccess()
+					if !tv1195_1 {
+						t.Error("expected true")
+					}
 				}
 				return err
 			},
@@ -1201,7 +1535,9 @@ func TestServerUserDataPassing(t *testing.T) {
 
 	t.Run("nil user data handled correctly", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var receivedUserData map[string]string
 		server := NewServer(WithServerListener(ln), WithServerSecret("testsecret"),
@@ -1216,16 +1552,25 @@ func TestServerUserDataPassing(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
-		assert.Nil(t, receivedUserData)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1220_1 := reply.IsPass()
+		if !tv1220_1 {
+			t.Error("expected true")
+		}
+		if receivedUserData != nil {
+			t.Errorf("expected nil, got %v", receivedUserData)
+		}
 	})
 }
 
 func TestServerMultiStepAuthentication(t *testing.T) {
 	t.Run("authentication continue with GETPASS", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		step := 0
 		handler := &multiStepHandler{
@@ -1264,19 +1609,31 @@ func TestServerMultiStepAuthentication(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(prompt string, noEcho bool) (string, error) {
-			assert.Contains(t, prompt, "Password")
-			assert.True(t, noEcho)
+			if !strings.Contains(prompt, "Password") {
+				t.Errorf("%q does not contain %q", prompt, "Password")
+			}
+			if !noEcho {
+				t.Error("expected true")
+			}
 			return "secret", nil
 		})
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
-		assert.Equal(t, 2, step)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1273_1 := reply.IsPass()
+		if !tv1273_1 {
+			t.Error("expected true")
+		}
+		if step != 2 {
+			t.Errorf("got %v, want %v", step, 2)
+		}
 	})
 
 	t.Run("authentication continue with GETDATA", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &multiStepHandler{
 			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -1305,18 +1662,28 @@ func TestServerMultiStepAuthentication(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(prompt string, noEcho bool) (string, error) {
-			assert.Contains(t, prompt, "OTP")
-			assert.False(t, noEcho)
+			if !strings.Contains(prompt, "OTP") {
+				t.Errorf("%q does not contain %q", prompt, "OTP")
+			}
+			if noEcho {
+				t.Error("expected false")
+			}
 			return "123456", nil
 		})
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1314_1 := reply.IsPass()
+		if !tv1314_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("authentication continue with GETUSER", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		step := 0
 		handler := &multiStepHandler{
@@ -1371,9 +1738,13 @@ func TestServerMultiStepAuthentication(t *testing.T) {
 			}
 			return "secret", nil
 		})
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1376_1 := reply.IsPass()
+		if !tv1376_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -1399,7 +1770,9 @@ func (h *multiStepHandler) HandleAuthenContinue(ctx context.Context, req *Authen
 func TestServerBodyTooLarge(t *testing.T) {
 	t.Run("reject packet with body too large", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1414,7 +1787,9 @@ func TestServerBodyTooLarge(t *testing.T) {
 
 		// Connect and send packet with large body
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		header := &Header{
@@ -1433,14 +1808,18 @@ func TestServerBodyTooLarge(t *testing.T) {
 		buf := make([]byte, 1)
 		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		_, err = conn.Read(buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestServerShutdownTimeout(t *testing.T) {
 	t.Run("shutdown with short timeout", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1455,13 +1834,17 @@ func TestServerShutdownTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 		err = server.Shutdown(ctx)
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 
 	t.Run("shutdown when not running", func(t *testing.T) {
 		server := NewServer(WithServerSecret("testsecret"))
 		err := server.Shutdown(context.Background())
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 }
 
@@ -1469,13 +1852,20 @@ func TestServerServeErrors(t *testing.T) {
 	t.Run("serve without listener", func(t *testing.T) {
 		server := NewServer(WithServerSecret("testsecret"))
 		err := server.Serve()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no listener")
+		if err == nil {
+			t.Error("expected an error")
+		}
+		tv1473_1 := err.Error()
+		if !strings.Contains(tv1473_1, "no listener") {
+			t.Errorf("%q does not contain %q", tv1473_1, "no listener")
+		}
 	})
 
 	t.Run("serve when already running", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1487,35 +1877,53 @@ func TestServerServeErrors(t *testing.T) {
 		defer server.Shutdown(context.Background())
 
 		err = server.Serve()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "already running")
+		if err == nil {
+			t.Error("expected an error")
+		}
+		tv1491_1 := err.Error()
+		if !strings.Contains(tv1491_1, "already running") {
+			t.Errorf("%q does not contain %q", tv1491_1, "already running")
+		}
 	})
 }
 
 func TestServerIsRunning(t *testing.T) {
 	t.Run("running state", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(WithServerListener(ln))
-		assert.False(t, server.IsRunning())
+		tv1501_1 := server.IsRunning()
+		if tv1501_1 {
+			t.Error("expected false")
+		}
 
 		go func() { server.Serve() }()
 		time.Sleep(50 * time.Millisecond)
 
-		assert.True(t, server.IsRunning())
+		tv1506_1 := server.IsRunning()
+		if !tv1506_1 {
+			t.Error("expected true")
+		}
 
 		server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		assert.False(t, server.IsRunning())
+		tv1511_1 := server.IsRunning()
+		if tv1511_1 {
+			t.Error("expected false")
+		}
 	})
 }
 
 func TestServerNilHandlerResponse(t *testing.T) {
 	t.Run("nil authentication response", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 			return nil
@@ -1533,13 +1941,20 @@ func TestServerNilHandlerResponse(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1537_1 := reply.IsError()
+		if !tv1537_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("nil authorization response", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := AuthorHandlerFunc(func(_ context.Context, _ *AuthorRequestContext) *AuthorResponse {
 			return nil
@@ -1557,13 +1972,20 @@ func TestServerNilHandlerResponse(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.True(t, resp.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1561_1 := resp.IsError()
+		if !tv1561_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("nil accounting response", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := AcctHandlerFunc(func(_ context.Context, _ *AcctRequestContext) *AcctReply {
 			return nil
@@ -1581,13 +2003,20 @@ func TestServerNilHandlerResponse(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		require.NoError(t, err)
-		assert.True(t, reply.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1585_1 := reply.IsError()
+		if !tv1585_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("nil authentication continue response", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &multiStepHandler{
 			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -1615,16 +2044,22 @@ func TestServerNilHandlerResponse(t *testing.T) {
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			return "password", nil
 		})
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1620_1 := reply.IsError()
+		if !tv1620_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerInvalidPackets(t *testing.T) {
 	t.Run("invalid continue packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Use handler that returns GETPASS to allow multi-step auth
 		handler := &multiStepHandler{
@@ -1651,7 +2086,9 @@ func TestServerInvalidPackets(t *testing.T) {
 
 		// Connect and send invalid continue packet
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		secret := []byte("testsecret")
@@ -1693,7 +2130,10 @@ func TestServerInvalidPackets(t *testing.T) {
 		deobfResp := Obfuscate(respHeader, secret, respBody)
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(deobfResp)
-		require.Equal(t, uint8(AuthenStatusGetPass), reply.Status)
+		tv1696_1 := uint8(AuthenStatusGetPass)
+		if reply.Status != tv1696_1 {
+			t.Fatalf("got %v, want %v", reply.Status, tv1696_1)
+		}
 
 		// Now send an invalid CONTINUE packet (too short body)
 		continueHeader := &Header{
@@ -1725,12 +2165,17 @@ func TestServerInvalidPackets(t *testing.T) {
 		errReply := &AuthenReply{}
 		errReply.UnmarshalBinary(errBody)
 
-		assert.Equal(t, uint8(AuthenStatusError), errReply.Status)
+		tv1728_1 := uint8(AuthenStatusError)
+		if errReply.Status != tv1728_1 {
+			t.Errorf("got %v, want %v", errReply.Status, tv1728_1)
+		}
 	})
 
 	t.Run("reject unencrypted flag on non-TLS connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1745,7 +2190,9 @@ func TestServerInvalidPackets(t *testing.T) {
 		// Send packet with FlagUnencrypted set on a non-TLS connection.
 		// Server must reject this to prevent obfuscation bypass.
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		start := &AuthenStart{
@@ -1775,12 +2222,16 @@ func TestServerInvalidPackets(t *testing.T) {
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		buf := make([]byte, HeaderLength)
 		_, err = io.ReadFull(conn, buf)
-		assert.Error(t, err, "server should reject unencrypted flag on non-TLS connection")
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 
 	t.Run("invalid authorization packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1798,12 +2249,17 @@ func TestServerInvalidPackets(t *testing.T) {
 		resp := &AuthorResponse{}
 		resp.UnmarshalBinary(respBody)
 
-		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+		tv1801_1 := uint8(AuthorStatusError)
+		if resp.Status != tv1801_1 {
+			t.Errorf("got %v, want %v", resp.Status, tv1801_1)
+		}
 	})
 
 	t.Run("invalid accounting packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1821,7 +2277,10 @@ func TestServerInvalidPackets(t *testing.T) {
 		reply := &AcctReply{}
 		reply.UnmarshalBinary(respBody)
 
-		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+		tv1824_1 := uint8(AcctStatusError)
+		if reply.Status != tv1824_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv1824_1)
+		}
 	})
 }
 
@@ -1840,7 +2299,9 @@ func TestServerSecretRotation(t *testing.T) {
 
 	t.Run("rotation succeeds with secondary secret", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1855,13 +2316,20 @@ func TestServerSecretRotation(t *testing.T) {
 		// Client uses the new secret
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1859_1 := reply.IsPass()
+		if !tv1859_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("rotation succeeds with primary secret", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1876,13 +2344,20 @@ func TestServerSecretRotation(t *testing.T) {
 		// Client uses the old (primary) secret - should succeed on first attempt
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("oldsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1880_1 := reply.IsPass()
+		if !tv1880_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("all secrets fail", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1898,12 +2373,16 @@ func TestServerSecretRotation(t *testing.T) {
 		// so the client can't deobfuscate the response and gets an error
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
 		_, err = client.Authenticate(context.Background(), "testuser", "password")
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 
 	t.Run("attempts zero backward compatible", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Provider returns Attempts=0 (backward compatible)
 		provider := SecretProviderFunc(func(_ context.Context, _ SecretRequest) SecretResponse {
@@ -1925,13 +2404,20 @@ func TestServerSecretRotation(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1929_1 := reply.IsPass()
+		if !tv1929_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("single connect uses resolved secret", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -1954,14 +2440,21 @@ func TestServerSecretRotation(t *testing.T) {
 		// Multiple requests should all work using the resolved secret
 		for range 3 {
 			reply, err := client.Authenticate(context.Background(), "testuser", "password")
-			require.NoError(t, err)
-			assert.True(t, reply.IsPass())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			tv1958_1 := reply.IsPass()
+			if !tv1958_1 {
+				t.Error("expected true")
+			}
 		}
 	})
 
 	t.Run("provider attempt values correct", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var receivedAttempts []int
 		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
@@ -1986,19 +2479,28 @@ func TestServerSecretRotation(t *testing.T) {
 		// Client uses secondary secret - provider should be called with attempt 0 then 1
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv1990_1 := reply.IsPass()
+		if !tv1990_1 {
+			t.Error("expected true")
+		}
 
 		// Wait for connection handling to complete
 		time.Sleep(50 * time.Millisecond)
 
 		// Attempt 0 is called in handleConnection setup, attempt 1 during rotation
-		assert.Equal(t, []int{0, 1}, receivedAttempts)
+		if !reflect.DeepEqual(receivedAttempts, []int{0, 1}) {
+			t.Errorf("got %v, want %v", receivedAttempts, []int{0, 1})
+		}
 	})
 
 	t.Run("rotation with authorization", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2012,14 +2514,30 @@ func TestServerSecretRotation(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.True(t, resp.IsPass())
-		assert.Contains(t, resp.Args(), "priv-lvl=15")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2016_1 := resp.IsPass()
+		if !tv2016_1 {
+			t.Error("expected true")
+		}
+		found := false
+		for _, a := range resp.Args() {
+			if a == "priv-lvl=15" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("args %v do not contain %q", resp.Args(), "priv-lvl=15")
+		}
 	})
 
 	t.Run("rotation with accounting", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2033,15 +2551,22 @@ func TestServerSecretRotation(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("newsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
-		require.NoError(t, err)
-		assert.True(t, reply.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2037_1 := reply.IsSuccess()
+		if !tv2037_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerTLSState(t *testing.T) {
 	t.Run("TLSState populated on TLS connection", func(t *testing.T) {
 		serverCert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var receivedTLSState *tls.ConnectionState
 		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
@@ -2051,7 +2576,9 @@ func TestServerTLSState(t *testing.T) {
 
 		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2068,8 +2595,12 @@ func TestServerTLSState(t *testing.T) {
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
 		time.Sleep(50 * time.Millisecond)
-		require.NotNil(t, receivedTLSState, "TLSState should be populated for TLS connections")
-		assert.True(t, receivedTLSState.HandshakeComplete)
+		if receivedTLSState == nil {
+			t.Fatal("expected non-nil")
+		}
+		if !receivedTLSState.HandshakeComplete {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("TLSState nil on non-TLS connection", func(t *testing.T) {
@@ -2082,7 +2613,9 @@ func TestServerTLSState(t *testing.T) {
 		})
 
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2098,19 +2631,29 @@ func TestServerTLSState(t *testing.T) {
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, called, "provider should have been called")
-		assert.Nil(t, receivedTLSState, "TLSState should be nil for non-TLS connections")
+		if !called {
+			t.Error("expected true")
+		}
+		if receivedTLSState != nil {
+			t.Errorf("expected nil, got %v", receivedTLSState)
+		}
 	})
 
 	t.Run("TLSState contains client certificate CN", func(t *testing.T) {
 		caCert, caKey, err := generateTestCA()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverCert, err := generateSignedCertificate(caCert, caKey, "server.test")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		clientCert, err := generateSignedCertificate(caCert, caKey, "router1.example.com")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		caCertPool := mustCertPool(caCert)
 
@@ -2128,7 +2671,9 @@ func TestServerTLSState(t *testing.T) {
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 		}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2149,19 +2694,26 @@ func TestServerTLSState(t *testing.T) {
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
 		time.Sleep(50 * time.Millisecond)
-		assert.Equal(t, "router1.example.com", receivedCN)
+		if receivedCN != "router1.example.com" {
+			t.Errorf("got %v, want %v", receivedCN, "router1.example.com")
+		}
 	})
 }
 
 func TestServerSessions(t *testing.T) {
 	t.Run("empty when no sessions", func(t *testing.T) {
 		server := NewServer()
-		assert.Empty(t, server.Sessions())
+		tv2159_1 := server.Sessions()
+		if len(tv2159_1) != 0 {
+			t.Errorf("expected empty, got %v", tv2159_1)
+		}
 	})
 
 	t.Run("returns active session", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		blocked := make(chan struct{})
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -2191,14 +2743,32 @@ func TestServerSessions(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		sessions := server.Sessions()
-		require.Len(t, sessions, 1)
-		assert.NotZero(t, sessions[0].TrackingID)
-		assert.NotNil(t, sessions[0].RemoteAddr)
-		assert.NotNil(t, sessions[0].LocalAddr)
-		assert.Nil(t, sessions[0].TLSState)
-		assert.Equal(t, uint8(PacketTypeAuthen), sessions[0].PacketType)
-		assert.Equal(t, SessionStateActive, sessions[0].State)
-		assert.False(t, sessions[0].StartedAt.IsZero())
+		if len(sessions) != 1 {
+			t.Fatalf("len = %d, want %d", len(sessions), 1)
+		}
+		if sessions[0].TrackingID == 0 {
+			t.Error("expected non-zero")
+		}
+		if sessions[0].RemoteAddr == nil {
+			t.Error("expected non-nil")
+		}
+		if sessions[0].LocalAddr == nil {
+			t.Error("expected non-nil")
+		}
+		if sessions[0].TLSState != nil {
+			t.Errorf("expected nil, got %v", sessions[0].TLSState)
+		}
+		tv2199_1 := uint8(PacketTypeAuthen)
+		if sessions[0].PacketType != tv2199_1 {
+			t.Errorf("got %v, want %v", sessions[0].PacketType, tv2199_1)
+		}
+		if sessions[0].State != SessionStateActive {
+			t.Errorf("got %v, want %v", sessions[0].State, SessionStateActive)
+		}
+		tv2201_1 := sessions[0].StartedAt.IsZero()
+		if tv2201_1 {
+			t.Error("expected false")
+		}
 
 		close(blocked)
 		<-done
@@ -2206,7 +2776,9 @@ func TestServerSessions(t *testing.T) {
 
 	t.Run("TLS session has TLSState", func(t *testing.T) {
 		serverCert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		blocked := make(chan struct{})
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -2216,7 +2788,9 @@ func TestServerSessions(t *testing.T) {
 
 		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2237,9 +2811,15 @@ func TestServerSessions(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 		sessions := server.Sessions()
-		require.Len(t, sessions, 1)
-		require.NotNil(t, sessions[0].TLSState)
-		assert.True(t, sessions[0].TLSState.HandshakeComplete)
+		if len(sessions) != 1 {
+			t.Fatalf("len = %d, want %d", len(sessions), 1)
+		}
+		if sessions[0].TLSState == nil {
+			t.Fatal("expected non-nil")
+		}
+		if !sessions[0].TLSState.HandshakeComplete {
+			t.Error("expected true")
+		}
 
 		close(blocked)
 		<-done
@@ -2247,7 +2827,9 @@ func TestServerSessions(t *testing.T) {
 
 	t.Run("session removed after completion", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2261,16 +2843,26 @@ func TestServerSessions(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2265_1 := reply.IsPass()
+		if !tv2265_1 {
+			t.Error("expected true")
+		}
 
 		time.Sleep(50 * time.Millisecond)
-		assert.Empty(t, server.Sessions())
+		tv2268_1 := server.Sessions()
+		if len(tv2268_1) != 0 {
+			t.Errorf("expected empty, got %v", tv2268_1)
+		}
 	})
 
 	t.Run("tracking IDs are unique", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		blocked := make(chan struct{})
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -2299,11 +2891,15 @@ func TestServerSessions(t *testing.T) {
 
 		time.Sleep(150 * time.Millisecond)
 		sessions := server.Sessions()
-		assert.Len(t, sessions, 3)
+		if len(sessions) != 3 {
+			t.Errorf("len = %d, want %d", len(sessions), 3)
+		}
 
 		ids := make(map[uint64]bool)
 		for _, s := range sessions {
-			assert.False(t, ids[s.TrackingID], "tracking IDs must be unique")
+			if ids[s.TrackingID] {
+				t.Error("expected false")
+			}
 			ids[s.TrackingID] = true
 		}
 
@@ -2315,12 +2911,17 @@ func TestServerSessions(t *testing.T) {
 func TestServerKickSession(t *testing.T) {
 	t.Run("kick nonexistent returns false", func(t *testing.T) {
 		server := NewServer()
-		assert.False(t, server.KickSession(999))
+		tv2318_1 := server.KickSession(999)
+		if tv2318_1 {
+			t.Error("expected false")
+		}
 	})
 
 	t.Run("kick active session", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		step := 0
 		handler := &multiStepHandler{
@@ -2354,18 +2955,29 @@ func TestServerKickSession(t *testing.T) {
 			// At this point, the session is active (GETPASS received).
 			// Kick it before sending the CONTINUE.
 			sessions := server.Sessions()
-			require.Len(t, sessions, 1)
-			assert.True(t, server.KickSession(sessions[0].TrackingID))
+			if len(sessions) != 1 {
+				t.Fatalf("len = %d, want %d", len(sessions), 1)
+			}
+			tv2358_1 := server.KickSession(sessions[0].TrackingID)
+			if !tv2358_1 {
+				t.Error("expected true")
+			}
 			return "password", nil
 		})
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsError(), "kicked session should get error response")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2363_1 := reply.IsError()
+		if !tv2363_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("kick in single-connect does not close connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		kickFirst := true
 		handler := &multiStepHandler{
@@ -2403,25 +3015,39 @@ func TestServerKickSession(t *testing.T) {
 		// First request: multi-step, kick during it
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			sessions := server.Sessions()
-			require.Len(t, sessions, 1)
+			if len(sessions) != 1 {
+				t.Fatalf("len = %d, want %d", len(sessions), 1)
+			}
 			server.KickSession(sessions[0].TrackingID)
 			return "password", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, reply.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2411_1 := reply.IsError()
+		if !tv2411_1 {
+			t.Error("expected true")
+		}
 
 		// Second request on same connection should still work
 		kickFirst = false
 		reply, err = client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2417_1 := reply.IsPass()
+		if !tv2417_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerHooks(t *testing.T) {
 	t.Run("connect and disconnect hooks", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		connectCh := make(chan ConnectEvent, 1)
 		disconnectCh := make(chan DisconnectEvent, 1)
@@ -2442,19 +3068,30 @@ func TestServerHooks(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2446_1 := reply.IsPass()
+		if !tv2446_1 {
+			t.Error("expected true")
+		}
 
 		connectEvent := <-connectCh
-		assert.NotNil(t, connectEvent.RemoteAddr)
+		if connectEvent.RemoteAddr == nil {
+			t.Error("expected non-nil")
+		}
 
 		disconnectEvent := <-disconnectCh
-		assert.NotNil(t, disconnectEvent.RemoteAddr)
+		if disconnectEvent.RemoteAddr == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("session start and end hooks", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		startCh := make(chan SessionEvent, 1)
 		endCh := make(chan SessionEvent, 1)
@@ -2475,20 +3112,34 @@ func TestServerHooks(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2479_1 := reply.IsPass()
+		if !tv2479_1 {
+			t.Error("expected true")
+		}
 
 		startEvent := <-startCh
-		assert.NotZero(t, startEvent.TrackingID)
-		assert.Equal(t, uint8(PacketTypeAuthen), startEvent.PacketType)
+		if startEvent.TrackingID == 0 {
+			t.Error("expected non-zero")
+		}
+		tv2483_1 := uint8(PacketTypeAuthen)
+		if startEvent.PacketType != tv2483_1 {
+			t.Errorf("got %v, want %v", startEvent.PacketType, tv2483_1)
+		}
 
 		endEvent := <-endCh
-		assert.Equal(t, SessionStateComplete, endEvent.State)
+		if endEvent.State != SessionStateComplete {
+			t.Errorf("got %v, want %v", endEvent.State, SessionStateComplete)
+		}
 	})
 
 	t.Run("bad secret hook", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var badSecretCalled bool
 		var badSecretRemote net.Addr
@@ -2513,13 +3164,19 @@ func TestServerHooks(t *testing.T) {
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, badSecretCalled)
-		assert.NotNil(t, badSecretRemote)
+		if !badSecretCalled {
+			t.Error("expected true")
+		}
+		if badSecretRemote == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("bad secret hook with rotation", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var badSecretCalled bool
 
@@ -2551,12 +3208,16 @@ func TestServerHooks(t *testing.T) {
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, badSecretCalled)
+		if !badSecretCalled {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("packet error hook", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var packetErrorCalled bool
 		var packetErr error
@@ -2579,7 +3240,9 @@ func TestServerHooks(t *testing.T) {
 
 		// Send an invalid packet body
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		secret := []byte("testsecret")
@@ -2601,13 +3264,19 @@ func TestServerHooks(t *testing.T) {
 		io.ReadFull(conn, respHeaderBuf)
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, packetErrorCalled)
-		assert.NotNil(t, packetErr)
+		if !packetErrorCalled {
+			t.Error("expected true")
+		}
+		if packetErr == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("nil hooks are safe", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2622,15 +3291,22 @@ func TestServerHooks(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2626_1 := reply.IsPass()
+		if !tv2626_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestServerMiddleware(t *testing.T) {
 	t.Run("single middleware intercepts authen", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		middlewareCalled := make(chan bool, 1)
 		mw := func(next Handler) Handler {
@@ -2650,14 +3326,23 @@ func TestServerMiddleware(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
-		assert.True(t, <-middlewareCalled)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2654_1 := reply.IsPass()
+		if !tv2654_1 {
+			t.Error("expected true")
+		}
+		if !(<-middlewareCalled) {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("middleware ordering", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		orderCh := make(chan int, 3)
 
@@ -2680,17 +3365,30 @@ func TestServerMiddleware(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2684_1 := reply.IsPass()
+		if !tv2684_1 {
+			t.Error("expected true")
+		}
 
-		assert.Equal(t, 1, <-orderCh)
-		assert.Equal(t, 2, <-orderCh)
-		assert.Equal(t, 3, <-orderCh)
+		if <-orderCh != 1 {
+			t.Errorf("got %v, want %v", <-orderCh, 1)
+		}
+		if <-orderCh != 2 {
+			t.Errorf("got %v, want %v", <-orderCh, 2)
+		}
+		if <-orderCh != 3 {
+			t.Errorf("got %v, want %v", <-orderCh, 3)
+		}
 	})
 
 	t.Run("middleware short-circuit", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		mw := func(next Handler) Handler {
 			return &shortCircuitMiddleware{MiddlewareHandler: MiddlewareHandler{Next: next}}
@@ -2709,13 +3407,20 @@ func TestServerMiddleware(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsFail())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2713_1 := reply.IsFail()
+		if !tv2713_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("middleware wraps all handler types", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		calls := make(chan string, 4)
 		mw := func(next Handler) Handler {
@@ -2736,18 +3441,26 @@ func TestServerMiddleware(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 
 		client.Authenticate(context.Background(), "testuser", "password")
-		assert.Equal(t, "authen_start", <-calls)
+		if <-calls != "authen_start" {
+			t.Errorf("got %v, want %v", <-calls, "authen_start")
+		}
 
 		client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		assert.Equal(t, "author", <-calls)
+		if <-calls != "author" {
+			t.Errorf("got %v, want %v", <-calls, "author")
+		}
 
 		client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
-		assert.Equal(t, "acct", <-calls)
+		if <-calls != "acct" {
+			t.Errorf("got %v, want %v", <-calls, "acct")
+		}
 	})
 
 	t.Run("no middleware passthrough", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -2761,8 +3474,13 @@ func TestServerMiddleware(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv2765_1 := reply.IsPass()
+		if !tv2765_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -2831,8 +3549,13 @@ func TestMiddlewareHandler(t *testing.T) {
 			},
 		}
 		reply := mh.HandleAuthenStart(ctx, req)
-		assert.NotNil(t, reply)
-		assert.True(t, reply.IsPass())
+		if reply == nil {
+			t.Error("expected non-nil")
+		}
+		tv2835_1 := reply.IsPass()
+		if !tv2835_1 {
+			t.Error("expected true")
+		}
 	})
 
 	t.Run("HandleAuthenContinue delegates", func(t *testing.T) {
@@ -2840,7 +3563,9 @@ func TestMiddlewareHandler(t *testing.T) {
 			Continue: &AuthenContinue{UserMsg: []byte("input")},
 		}
 		reply := mh.HandleAuthenContinue(ctx, req)
-		assert.NotNil(t, reply)
+		if reply == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("HandleAuthorRequest delegates", func(t *testing.T) {
@@ -2850,7 +3575,9 @@ func TestMiddlewareHandler(t *testing.T) {
 			},
 		}
 		resp := mh.HandleAuthorRequest(ctx, req)
-		assert.NotNil(t, resp)
+		if resp == nil {
+			t.Error("expected non-nil")
+		}
 	})
 
 	t.Run("HandleAcctRequest delegates", func(t *testing.T) {
@@ -2860,7 +3587,9 @@ func TestMiddlewareHandler(t *testing.T) {
 			},
 		}
 		reply := mh.HandleAcctRequest(ctx, req)
-		assert.NotNil(t, reply)
+		if reply == nil {
+			t.Error("expected non-nil")
+		}
 	})
 }
 
@@ -2868,15 +3597,23 @@ func TestComposedHandlerAuthenContinueNil(t *testing.T) {
 	t.Run("nil authen handler returns error on continue", func(t *testing.T) {
 		h := &ComposedHandler{authen: nil, author: nil, acct: nil}
 		reply := h.HandleAuthenContinue(context.Background(), &AuthenContinueRequest{})
-		assert.Equal(t, uint8(AuthenStatusError), reply.Status)
-		assert.Contains(t, string(reply.ServerMsg), "no authentication handler")
+		tv2871_1 := uint8(AuthenStatusError)
+		if reply.Status != tv2871_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv2871_1)
+		}
+		tv2872_1 := string(reply.ServerMsg)
+		if !strings.Contains(tv2872_1, "no authentication handler") {
+			t.Errorf("%q does not contain %q", tv2872_1, "no authentication handler")
+		}
 	})
 }
 
 func TestSessionsDeepCopiesUserData(t *testing.T) {
 	t.Run("returned sessions have independent UserData", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		blocked := make(chan struct{})
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -2911,16 +3648,24 @@ func TestSessionsDeepCopiesUserData(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		sessions1 := server.Sessions()
-		require.Len(t, sessions1, 1)
-		assert.Equal(t, "value", sessions1[0].UserData["key"])
+		if len(sessions1) != 1 {
+			t.Fatalf("len = %d, want %d", len(sessions1), 1)
+		}
+		if sessions1[0].UserData["key"] != "value" {
+			t.Errorf("got %v, want %v", sessions1[0].UserData["key"], "value")
+		}
 
 		// Mutate returned map
 		sessions1[0].UserData["key"] = "mutated"
 
 		// Second call should return original value
 		sessions2 := server.Sessions()
-		require.Len(t, sessions2, 1)
-		assert.Equal(t, "value", sessions2[0].UserData["key"])
+		if len(sessions2) != 1 {
+			t.Fatalf("len = %d, want %d", len(sessions2), 1)
+		}
+		if sessions2[0].UserData["key"] != "value" {
+			t.Errorf("got %v, want %v", sessions2[0].UserData["key"], "value")
+		}
 
 		close(blocked)
 		<-done
@@ -2932,7 +3677,9 @@ func TestCompleteTLSHandshakeNonTLS(t *testing.T) {
 		server := NewServer()
 
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		// Create a plain TCP connection pair
@@ -2943,34 +3690,48 @@ func TestCompleteTLSHandshakeNonTLS(t *testing.T) {
 		}()
 
 		clientConn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer clientConn.Close()
 
 		serverConn := <-done
 		defer serverConn.Close()
 
 		state, err := server.completeTLSHandshake(context.Background(), serverConn)
-		assert.NoError(t, err)
-		assert.Nil(t, state)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if state != nil {
+			t.Errorf("expected nil, got %v", state)
+		}
 	})
 }
 
 func TestIsSessionKickedEdgeCases(t *testing.T) {
 	t.Run("trackingID zero returns false", func(t *testing.T) {
 		server := NewServer()
-		assert.False(t, server.isSessionKicked(0))
+		tv2961_1 := server.isSessionKicked(0)
+		if tv2961_1 {
+			t.Error("expected false")
+		}
 	})
 
 	t.Run("session not found returns false", func(t *testing.T) {
 		server := NewServer()
-		assert.False(t, server.isSessionKicked(999999))
+		tv2966_1 := server.isSessionKicked(999999)
+		if tv2966_1 {
+			t.Error("expected false")
+		}
 	})
 }
 
 func TestSendKickedResponseAuthorAndAcct(t *testing.T) {
 	t.Run("kicked authorization session gets error", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := &multiStepHandler{
 			onStart: func(_ context.Context, _ *AuthenRequest) *AuthenReply {
@@ -3015,24 +3776,38 @@ func TestSendKickedResponseAuthorAndAcct(t *testing.T) {
 		// Send authen with kick during multi-step
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			sessions := server.Sessions()
-			require.Len(t, sessions, 1)
+			if len(sessions) != 1 {
+				t.Fatalf("len = %d, want %d", len(sessions), 1)
+			}
 			server.KickSession(sessions[0].TrackingID)
 			return "password", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, reply.IsError(), "kicked authen session should return error")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv3023_1 := reply.IsError()
+		if !tv3023_1 {
+			t.Error("expected true")
+		}
 
 		// After kicked session cleanup, new requests on same connection should work
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.True(t, resp.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv3028_1 := resp.IsPass()
+		if !tv3028_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestSendKickedResponseAuthorSession(t *testing.T) {
 	t.Run("kicked authorization session in single-connect mode", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Use a blocking authen handler so we can kick the session
 		// Then follow up with an author request on the same connection
@@ -3077,8 +3852,13 @@ func TestSendKickedResponseAuthorSession(t *testing.T) {
 		reply, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
 			return "password", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv3081_1 := reply.IsPass()
+		if !tv3081_1 {
+			t.Error("expected true")
+		}
 
 		// Now send an author request; the server will register a new session.
 		// We need to kick it while the server is processing. Use a blocking author handler.
@@ -3128,14 +3908,21 @@ func TestSendKickedResponseDirectUnit(t *testing.T) {
 
 		respHeaderBuf := make([]byte, HeaderLength)
 		_, err := io.ReadFull(clientConn, respHeaderBuf)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		respHeader := &Header{}
-		require.NoError(t, respHeader.UnmarshalBinary(respHeaderBuf))
+		tv3134_1 := respHeader.UnmarshalBinary(respHeaderBuf)
+		if tv3134_1 != nil {
+			t.Fatalf("unexpected error: %v", tv3134_1)
+		}
 
 		respBody := make([]byte, respHeader.Length)
 		_, err = io.ReadFull(clientConn, respBody)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		return Obfuscate(respHeader, secret, respBody)
 	}
@@ -3143,15 +3930,27 @@ func TestSendKickedResponseDirectUnit(t *testing.T) {
 	t.Run("author kicked response", func(t *testing.T) {
 		body := sendKickedAndReadResponse(t, PacketTypeAuthor, 0xc1)
 		resp := &AuthorResponse{}
-		require.NoError(t, resp.UnmarshalBinary(body))
-		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+		tv3146_1 := resp.UnmarshalBinary(body)
+		if tv3146_1 != nil {
+			t.Fatalf("unexpected error: %v", tv3146_1)
+		}
+		tv3147_1 := uint8(AuthorStatusError)
+		if resp.Status != tv3147_1 {
+			t.Errorf("got %v, want %v", resp.Status, tv3147_1)
+		}
 	})
 
 	t.Run("acct kicked response", func(t *testing.T) {
 		body := sendKickedAndReadResponse(t, PacketTypeAcct, 0xc0)
 		reply := &AcctReply{}
-		require.NoError(t, reply.UnmarshalBinary(body))
-		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+		tv3153_1 := reply.UnmarshalBinary(body)
+		if tv3153_1 != nil {
+			t.Fatalf("unexpected error: %v", tv3153_1)
+		}
+		tv3154_1 := uint8(AcctStatusError)
+		if reply.Status != tv3154_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv3154_1)
+		}
 	})
 
 	t.Run("invalid packet type returns without writing", func(t *testing.T) {
@@ -3176,18 +3975,24 @@ func TestSendKickedResponseDirectUnit(t *testing.T) {
 		// Try to read from client side - should get EOF (nothing was written)
 		buf := make([]byte, 1)
 		_, err := clientConn.Read(buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestHandleConnectionTLSHandshakeError(t *testing.T) {
 	t.Run("TLS handshake failure closes connection", func(t *testing.T) {
 		serverCert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3200,7 +4005,9 @@ func TestHandleConnectionTLSHandshakeError(t *testing.T) {
 
 		// Connect with plain TCP (no TLS) - handshake will fail
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Send garbage - this will cause TLS handshake to fail
 		conn.Write([]byte("not a TLS handshake"))
@@ -3208,14 +4015,19 @@ func TestHandleConnectionTLSHandshakeError(t *testing.T) {
 		// Server should handle the error gracefully
 		time.Sleep(100 * time.Millisecond)
 		conn.Close()
-		assert.True(t, server.IsRunning())
+		tv3211_1 := server.IsRunning()
+		if !tv3211_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestHandleConnectionWritePacketError(t *testing.T) {
 	t.Run("write error closes connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 			return &AuthenReply{Status: AuthenStatusPass}
@@ -3234,7 +4046,9 @@ func TestHandleConnectionWritePacketError(t *testing.T) {
 		// Connect and send a valid authen request, then close the conn before
 		// the server can write the response
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		secret := []byte("testsecret")
 		start := &AuthenStart{
@@ -3265,7 +4079,10 @@ func TestHandleConnectionWritePacketError(t *testing.T) {
 
 		// Server should handle write error gracefully
 		time.Sleep(100 * time.Millisecond)
-		assert.True(t, server.IsRunning())
+		tv3268_1 := server.IsRunning()
+		if !tv3268_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -3295,8 +4112,12 @@ func TestDeobfuscateAndValidateTLSMode(t *testing.T) {
 
 		// In TLS mode, body should pass through without obfuscation
 		result, err := server.deobfuscateAndValidate(header, body, []byte("secret"), true)
-		require.NoError(t, err)
-		assert.Equal(t, body, result)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(result, body) {
+			t.Errorf("got %v, want %v", result, body)
+		}
 	})
 }
 
@@ -3329,7 +4150,9 @@ func TestHandleAuthenPacketWithStateGetPassStatus(t *testing.T) {
 		body, _ := start.MarshalBinary()
 
 		_, _, sessionState := server.handleAuthenPacketWithState(context.Background(), header, body, cs)
-		assert.Equal(t, SessionStateActive, sessionState)
+		if sessionState != SessionStateActive {
+			t.Errorf("got %v, want %v", sessionState, SessionStateActive)
+		}
 	})
 }
 
@@ -3358,23 +4181,39 @@ func TestWritePacketTLSModeUnit(t *testing.T) {
 
 		respHeaderBuf := make([]byte, HeaderLength)
 		_, err := io.ReadFull(clientConn, respHeaderBuf)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		respHeader := &Header{}
-		require.NoError(t, respHeader.UnmarshalBinary(respHeaderBuf))
+		tv3364_1 := respHeader.UnmarshalBinary(respHeaderBuf)
+		if tv3364_1 != nil {
+			t.Fatalf("unexpected error: %v", tv3364_1)
+		}
 
 		// Verify unencrypted flag is set
-		assert.True(t, respHeader.IsUnencrypted())
+		tv3367_1 := respHeader.IsUnencrypted()
+		if !tv3367_1 {
+			t.Error("expected true")
+		}
 
 		// Body should not be obfuscated (TLS mode)
 		respBody := make([]byte, respHeader.Length)
 		_, err = io.ReadFull(clientConn, respBody)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// In TLS mode, body is sent as-is, not obfuscated
 		parsedReply := &AuthenReply{}
-		require.NoError(t, parsedReply.UnmarshalBinary(respBody))
-		assert.Equal(t, uint8(AuthenStatusPass), parsedReply.Status)
+		tv3376_1 := parsedReply.UnmarshalBinary(respBody)
+		if tv3376_1 != nil {
+			t.Fatalf("unexpected error: %v", tv3376_1)
+		}
+		tv3377_1 := uint8(AuthenStatusPass)
+		if parsedReply.Status != tv3377_1 {
+			t.Errorf("got %v, want %v", parsedReply.Status, tv3377_1)
+		}
 	})
 }
 
@@ -3392,7 +4231,9 @@ func TestReadRawPacketErrors(t *testing.T) {
 		}()
 
 		_, _, err := server.readRawPacket(serverConn, false, false)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 		serverConn.Close()
 	})
 
@@ -3419,7 +4260,9 @@ func TestReadRawPacketErrors(t *testing.T) {
 		}()
 
 		_, _, err := server.readRawPacket(serverConn, false, false)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 
 	t.Run("TLS requires unencrypted flag", func(t *testing.T) {
@@ -3444,16 +4287,25 @@ func TestReadRawPacketErrors(t *testing.T) {
 		}()
 
 		_, _, err := server.readRawPacket(serverConn, false, true) // isTLS=true
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.Contains(t, err.Error(), "RFC 9887")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		tv3449_1 := err.Error()
+		if !strings.Contains(tv3449_1, "RFC 9887") {
+			t.Errorf("%q does not contain %q", tv3449_1, "RFC 9887")
+		}
 	})
 }
 
 func TestHandleConnectionSequenceValidationFailure(t *testing.T) {
 	t.Run("invalid sequence number closes connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3466,7 +4318,9 @@ func TestHandleConnectionSequenceValidationFailure(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		secret := []byte("testsecret")
@@ -3499,14 +4353,18 @@ func TestHandleConnectionSequenceValidationFailure(t *testing.T) {
 		buf := make([]byte, 1)
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, err = conn.Read(buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestHandleConnectionNextSeqNoOverflow(t *testing.T) {
 	t.Run("sequence overflow during response generation", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Create a multi-step handler that keeps going until seq overflow
 		handler := &multiStepHandler{
@@ -3537,7 +4395,9 @@ func TestHandleConnectionNextSeqNoOverflow(t *testing.T) {
 
 		// Send many requests manually to exhaust sequence numbers
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		secret := []byte("testsecret")
@@ -3619,14 +4479,19 @@ func TestHandleConnectionNextSeqNoOverflow(t *testing.T) {
 
 		// Server should have gracefully handled the overflow
 		time.Sleep(100 * time.Millisecond)
-		assert.True(t, server.IsRunning())
+		tv3622_1 := server.IsRunning()
+		if !tv3622_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestSecretRotationReadError(t *testing.T) {
 	t.Run("readRawPacket error during secret rotation", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
 			secrets := []string{"secret1", "secret2"}
@@ -3648,14 +4513,19 @@ func TestSecretRotationReadError(t *testing.T) {
 
 		// Connect and send partial data to cause readRawPacket error
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Send a truncated header
 		conn.Write([]byte{0xc0, 0x01})
 		conn.Close()
 
 		time.Sleep(100 * time.Millisecond)
-		assert.True(t, server.IsRunning())
+		tv3658_1 := server.IsRunning()
+		if !tv3658_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -3718,10 +4588,17 @@ func TestResolveSecretAllFailFallback(t *testing.T) {
 		}
 
 		result := server.resolveSecret(context.Background(), header, rawBody, cs)
-		assert.NotNil(t, result)
-		assert.True(t, badSecretCalled)
+		if result == nil {
+			t.Error("expected non-nil")
+		}
+		if !badSecretCalled {
+			t.Error("expected true")
+		}
 		// Result should be deobfuscated with first secret (garbage, but not nil)
-		assert.Equal(t, Obfuscate(header, []byte("secret1"), rawBody), result)
+		tv3724_1 := Obfuscate(header, []byte("secret1"), rawBody)
+		if !bytes.Equal(result, tv3724_1) {
+			t.Errorf("got %v, want %v", result, tv3724_1)
+		}
 	})
 
 	t.Run("all secrets fail with empty secret returns raw body", func(t *testing.T) {
@@ -3781,7 +4658,9 @@ func TestResolveSecretAllFailFallback(t *testing.T) {
 
 		result := server.resolveSecret(context.Background(), header, rawBody, cs)
 		// With empty first secret and len(cs.secret)==0, the fallback returns rawBody
-		assert.Equal(t, rawBody, result)
+		if !bytes.Equal(result, rawBody) {
+			t.Errorf("got %v, want %v", result, rawBody)
+		}
 	})
 }
 
@@ -3810,7 +4689,9 @@ func TestWritePacketBodyWriteError(t *testing.T) {
 		}
 
 		err := server.writePacket(serverConn, header, body, nil, false)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 		serverConn.Close()
 	})
 }
@@ -3818,7 +4699,9 @@ func TestWritePacketBodyWriteError(t *testing.T) {
 func TestHandleConnectionShutdownDuringLoop(t *testing.T) {
 	t.Run("shutdown signal during connection loop", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		handler := AuthenHandlerFunc(func(_ context.Context, _ *AuthenRequest) *AuthenReply {
 			return &AuthenReply{Status: AuthenStatusPass}
@@ -3845,8 +4728,13 @@ func TestHandleConnectionShutdownDuringLoop(t *testing.T) {
 
 		// Send one request to establish single-connect
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv3849_1 := reply.IsPass()
+		if !tv3849_1 {
+			t.Error("expected true")
+		}
 
 		// Shutdown while connection is waiting for next packet.
 		// Use short context; the server's read timeout (200ms) will unblock the read,
@@ -3854,14 +4742,18 @@ func TestHandleConnectionShutdownDuringLoop(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		err = server.Shutdown(ctx)
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 }
 
 func TestHandleConnectionInvalidPacketType(t *testing.T) {
 	t.Run("invalid packet type closes connection", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3874,7 +4766,9 @@ func TestHandleConnectionInvalidPacketType(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		// Send packet with invalid type (0xFF)
@@ -3895,14 +4789,18 @@ func TestHandleConnectionInvalidPacketType(t *testing.T) {
 		buf := make([]byte, 1)
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, err = conn.Read(buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestReadRawPacketBodyTooLarge(t *testing.T) {
 	t.Run("body exceeds max length", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3916,7 +4814,9 @@ func TestReadRawPacketBodyTooLarge(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		header := &Header{
@@ -3934,14 +4834,18 @@ func TestReadRawPacketBodyTooLarge(t *testing.T) {
 		buf := make([]byte, 1)
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, err = conn.Read(buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestReadRawPacketUnencryptedFlagOnNonTLSWithSecret(t *testing.T) {
 	t.Run("unencrypted flag rejected on non-TLS with secret", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3954,7 +4858,9 @@ func TestReadRawPacketUnencryptedFlagOnNonTLSWithSecret(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		start := &AuthenStart{
@@ -3983,18 +4889,24 @@ func TestReadRawPacketUnencryptedFlagOnNonTLSWithSecret(t *testing.T) {
 		buf := make([]byte, HeaderLength)
 		conn.SetReadDeadline(time.Now().Add(time.Second))
 		_, err = io.ReadFull(conn, buf)
-		assert.Error(t, err)
+		if err == nil {
+			t.Error("expected an error")
+		}
 	})
 }
 
 func TestWritePacketTLSMode(t *testing.T) {
 	t.Run("TLS mode sets unencrypted flag and skips obfuscation", func(t *testing.T) {
 		serverCert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{Certificates: []tls.Certificate{serverCert}}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -4009,8 +4921,13 @@ func TestWritePacketTLSMode(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithTLSConfig(clientConfig))
 
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv4013_1 := reply.IsPass()
+		if !tv4013_1 {
+			t.Error("expected true")
+		}
 	})
 }
 
@@ -4046,7 +4963,9 @@ func TestHandleAuthenPacketWithStateEmptyBody(t *testing.T) {
 
 		_, _, sessionState := server.handleAuthenPacketWithState(context.Background(), header, body, cs)
 		// Handler returns nil -> authenErrorResponse -> status byte is AuthenStatusError
-		assert.Equal(t, SessionStateError, sessionState)
+		if sessionState != SessionStateError {
+			t.Errorf("got %v, want %v", sessionState, SessionStateError)
+		}
 	})
 
 	t.Run("GetData status returns active state", func(t *testing.T) {
@@ -4077,7 +4996,9 @@ func TestHandleAuthenPacketWithStateEmptyBody(t *testing.T) {
 		body, _ := start.MarshalBinary()
 
 		_, _, sessionState := server.handleAuthenPacketWithState(context.Background(), header, body, cs)
-		assert.Equal(t, SessionStateActive, sessionState)
+		if sessionState != SessionStateActive {
+			t.Errorf("got %v, want %v", sessionState, SessionStateActive)
+		}
 	})
 
 	t.Run("GetUser status returns active state", func(t *testing.T) {
@@ -4107,14 +5028,18 @@ func TestHandleAuthenPacketWithStateEmptyBody(t *testing.T) {
 		body, _ := start.MarshalBinary()
 
 		_, _, sessionState := server.handleAuthenPacketWithState(context.Background(), header, body, cs)
-		assert.Equal(t, SessionStateActive, sessionState)
+		if sessionState != SessionStateActive {
+			t.Errorf("got %v, want %v", sessionState, SessionStateActive)
+		}
 	})
 }
 
 func TestHandleAuthorPacketBadSecret(t *testing.T) {
 	t.Run("bad secret in authorization packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var badSecretCalled bool
 		server := NewServer(
@@ -4137,7 +5062,9 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 		wrongSecret := []byte("wrongsecret")
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		// Build valid author request body, but obfuscate with wrong secret
@@ -4169,7 +5096,9 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 		// Read error response (server uses its own secret to deobfuscate, gets garbage)
 		respHeaderBuf := make([]byte, HeaderLength)
 		_, err = io.ReadFull(conn, respHeaderBuf)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		respHeader := &Header{}
 		respHeader.UnmarshalBinary(respHeaderBuf)
@@ -4180,17 +5109,24 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 
 		resp := &AuthorResponse{}
 		resp.UnmarshalBinary(respBody)
-		assert.Equal(t, uint8(AuthorStatusError), resp.Status)
+		tv4183_1 := uint8(AuthorStatusError)
+		if resp.Status != tv4183_1 {
+			t.Errorf("got %v, want %v", resp.Status, tv4183_1)
+		}
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, badSecretCalled)
+		if !badSecretCalled {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestHandleAcctPacketBadSecret(t *testing.T) {
 	t.Run("bad secret in accounting packet", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		var badSecretCalled bool
 		server := NewServer(
@@ -4212,7 +5148,9 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 		wrongSecret := []byte("wrongsecret")
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		request := &AcctRequest{
@@ -4242,7 +5180,9 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 
 		respHeaderBuf := make([]byte, HeaderLength)
 		_, err = io.ReadFull(conn, respHeaderBuf)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		respHeader := &Header{}
 		respHeader.UnmarshalBinary(respHeaderBuf)
@@ -4253,17 +5193,24 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 
 		reply := &AcctReply{}
 		reply.UnmarshalBinary(respBody)
-		assert.Equal(t, uint8(AcctStatusError), reply.Status)
+		tv4256_1 := uint8(AcctStatusError)
+		if reply.Status != tv4256_1 {
+			t.Errorf("got %v, want %v", reply.Status, tv4256_1)
+		}
 
 		time.Sleep(50 * time.Millisecond)
-		assert.True(t, badSecretCalled)
+		if !badSecretCalled {
+			t.Error("expected true")
+		}
 	})
 }
 
 func TestResolveSecretNonBadSecretError(t *testing.T) {
 	t.Run("non-ErrBadSecret error stops rotation early", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Provider with 3 secrets. Client uses secret1 (the first one).
 		// resolveSecret should succeed on attempt 0 and NOT try secrets 2 or 3.
@@ -4290,21 +5237,30 @@ func TestResolveSecretNonBadSecretError(t *testing.T) {
 		// Client uses secret1 - resolveSecret should succeed on first attempt
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("secret1"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tv4294_1 := reply.IsPass()
+		if !tv4294_1 {
+			t.Error("expected true")
+		}
 
 		time.Sleep(50 * time.Millisecond)
 		// The provider is called once for initial getSecret (attempt=0).
 		// resolveSecret reuses cs.secret for attempt 0 (no extra provider call),
 		// and since it succeeds, attempts 1 and 2 are never tried.
-		assert.Equal(t, []int{0}, rotationAttempts, "should only call provider once for attempt 0")
+		if !reflect.DeepEqual(rotationAttempts, []int{0}) {
+			t.Errorf("got %v, want %v", rotationAttempts, []int{0})
+		}
 	})
 }
 
 func TestSequenceOverflowCleanup(t *testing.T) {
 	t.Run("sequence overflow causes cleanup", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Create a handler that keeps returning GETPASS to force many sequence increments
 		// The session seq starts at 1, responses use 2, next request 3, etc.
@@ -4351,11 +5307,17 @@ func TestSequenceOverflowCleanup(t *testing.T) {
 
 		// Either succeeds or the server/client handles overflow gracefully
 		if err == nil {
-			assert.True(t, reply.IsPass() || reply.IsError())
+			tv4354_1 := reply.IsPass() || reply.IsError()
+			if !tv4354_1 {
+				t.Error("expected true")
+			}
 		}
 		// Session should be cleaned up after completion
 		time.Sleep(100 * time.Millisecond)
-		assert.Empty(t, server.Sessions())
+		tv4358_1 := server.Sessions()
+		if len(tv4358_1) != 0 {
+			t.Errorf("expected empty, got %v", tv4358_1)
+		}
 	})
 }
 
@@ -4429,8 +5391,13 @@ func TestServeConnPAP(t *testing.T) {
 	defer cleanup()
 
 	reply, err := client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4433_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4433_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4433_1)
+	}
 }
 
 func TestServeConnASCIIMultiExchange(t *testing.T) {
@@ -4443,9 +5410,16 @@ func TestServeConnASCIIMultiExchange(t *testing.T) {
 		prompts++
 		return "reply", nil
 	})
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
-	assert.Equal(t, 2, prompts, "expected GETUSER and GETPASS prompts")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4447_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4447_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4447_1)
+	}
+	if prompts != 2 {
+		t.Errorf("got %v, want %v", prompts, 2)
+	}
 }
 
 func TestServeConnAuthorize(t *testing.T) {
@@ -4454,8 +5428,13 @@ func TestServeConnAuthorize(t *testing.T) {
 	defer cleanup()
 
 	resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthorStatusPassAdd), resp.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4458_1 := uint8(AuthorStatusPassAdd)
+	if resp.Status != tv4458_1 {
+		t.Errorf("got %v, want %v", resp.Status, tv4458_1)
+	}
 }
 
 func TestServeConnAccounting(t *testing.T) {
@@ -4464,8 +5443,13 @@ func TestServeConnAccounting(t *testing.T) {
 	defer cleanup()
 
 	reply, err := client.Accounting(context.Background(), AcctFlagStop, "testuser", []string{"service=shell"})
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AcctStatusSuccess), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4468_1 := uint8(AcctStatusSuccess)
+	if reply.Status != tv4468_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4468_1)
+	}
 }
 
 func TestServeConnFiresHooks(t *testing.T) {
@@ -4486,62 +5470,116 @@ func TestServeConnFiresHooks(t *testing.T) {
 
 	client := NewClient(WithAddress("pipe"), WithDialer(&pipeDialer{conn: clientConn}), WithSecret("s3cr3t"))
 	reply, err := client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4490_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4490_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4490_1)
+	}
 
 	client.Close()
 	clientConn.Close()
 	<-done
 
-	assert.Equal(t, int32(1), connects.Load(), "OnConnect fired once")
-	assert.Equal(t, int32(1), sessions.Load(), "OnSessionStart fired once")
-	assert.Equal(t, int32(1), disconnects.Load(), "OnDisconnect fired once")
+	tv4496_1 := int32(1)
+	tv4496_2 := connects.Load()
+	if tv4496_2 != tv4496_1 {
+		t.Errorf("got %v, want %v", tv4496_2, tv4496_1)
+	}
+	tv4497_1 := int32(1)
+	tv4497_2 := sessions.Load()
+	if tv4497_2 != tv4497_1 {
+		t.Errorf("got %v, want %v", tv4497_2, tv4497_1)
+	}
+	tv4498_1 := int32(1)
+	tv4498_2 := disconnects.Load()
+	if tv4498_2 != tv4498_1 {
+		t.Errorf("got %v, want %v", tv4498_2, tv4498_1)
+	}
 }
 
 func TestServeConnNoListener(t *testing.T) {
 	// A server with no listener configured must still serve a caller-supplied
 	// connection: ServeConn lazily initializes the shutdown machinery.
 	server := NewServer(WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
-	assert.Nil(t, server.Addr(), "no listener configured")
+	tv4505_1 := server.Addr()
+	if tv4505_1 != nil {
+		t.Errorf("expected nil, got %v", tv4505_1)
+	}
 
 	client, cleanup := newServeConnPair(t, server, "s3cr3t")
 	defer cleanup()
 
 	reply, err := client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
-	assert.True(t, server.IsRunning(), "ServeConn marks the server running")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4512_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4512_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4512_1)
+	}
+	tv4513_1 := server.IsRunning()
+	if !tv4513_1 {
+		t.Error("expected true")
+	}
 }
 
 func TestServeStartsAfterServeConn(t *testing.T) {
 	ln, err := ListenTCP("127.0.0.1:0")
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	server := NewServer(WithServerListener(ln), WithHandler(&testHandler{}), WithServerSecret("s3cr3t"))
 
 	pipeClient, pipeCleanup := newServeConnPair(t, server, "s3cr3t")
 	defer pipeCleanup()
 	pipeReply, err := pipeClient.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), pipeReply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4525_1 := uint8(AuthenStatusPass)
+	if pipeReply.Status != tv4525_1 {
+		t.Errorf("got %v, want %v", pipeReply.Status, tv4525_1)
+	}
 
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- server.Serve()
 	}()
-	require.Eventually(t, func() bool {
-		server.mu.Lock()
-		defer server.mu.Unlock()
-		return server.serving
-	}, time.Second, 5*time.Millisecond)
+	{
+		deadline := time.Now().Add(time.Second)
+		cond := func() bool {
+			server.mu.Lock()
+			defer server.mu.Unlock()
+			return server.serving
+		}
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal("condition not met")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 
 	client := NewClient(WithAddress(ln.Addr().String()), WithSecret("s3cr3t"))
 	reply, err := client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4540_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4540_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4540_1)
+	}
 	client.Close()
 
-	require.NoError(t, server.Shutdown(context.Background()))
-	assert.NoError(t, <-serveDone)
+	tv4543_1 := server.Shutdown(context.Background())
+	if tv4543_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4543_1)
+	}
+	if <-serveDone != nil {
+		t.Errorf("unexpected error: %v", <-serveDone)
+	}
 }
 
 func TestServeConnCleanClose(t *testing.T) {
@@ -4549,8 +5587,14 @@ func TestServeConnCleanClose(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	clientConn.Close()
 
-	assert.NoError(t, server.ServeConn(serverConn))
-	require.NoError(t, server.Shutdown(context.Background()))
+	tv4552_1 := server.ServeConn(serverConn)
+	if tv4552_1 != nil {
+		t.Errorf("unexpected error: %v", tv4552_1)
+	}
+	tv4553_1 := server.Shutdown(context.Background())
+	if tv4553_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4553_1)
+	}
 }
 
 func TestServeConnShutdownCancels(t *testing.T) {
@@ -4565,21 +5609,32 @@ func TestServeConnShutdownCancels(t *testing.T) {
 	}()
 
 	// Wait until the connection is registered as active before shutting down.
-	require.Eventually(t, func() bool {
-		found := false
-		server.activeConns.Range(func(_, _ any) bool {
-			found = true
-			return false
-		})
-		return found
-	}, time.Second, 5*time.Millisecond)
+	{
+		deadline := time.Now().Add(time.Second)
+		cond := func() bool {
+			found := false
+			server.activeConns.Range(func(_, _ any) bool {
+				found = true
+				return false
+			})
+			return found
+		}
+		for !cond() {
+			if time.Now().After(deadline) {
+				t.Fatal("condition not met")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 
 	// A ServeConn blocked in a pipe Read only unblocks when Shutdown forcibly
 	// closes the active connection, which happens once the context expires.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	err := server.Shutdown(shutdownCtx)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error %v is not %v", err, context.DeadlineExceeded)
+	}
 
 	select {
 	case <-errCh:
@@ -4594,18 +5649,34 @@ func TestServeConnRestartsAfterShutdown(t *testing.T) {
 
 	client, cleanup := newServeConnPair(t, server, "s3cr3t")
 	reply, err := client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4598_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4598_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4598_1)
+	}
 	cleanup()
 
-	require.NoError(t, server.Shutdown(context.Background()))
-	assert.False(t, server.IsRunning())
+	tv4601_1 := server.Shutdown(context.Background())
+	if tv4601_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4601_1)
+	}
+	tv4602_1 := server.IsRunning()
+	if tv4602_1 {
+		t.Error("expected false")
+	}
 
 	client, cleanup = newServeConnPair(t, server, "s3cr3t")
 	defer cleanup()
 	reply, err = client.Authenticate(context.Background(), "testuser", "password")
-	require.NoError(t, err)
-	assert.Equal(t, uint8(AuthenStatusPass), reply.Status)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4608_1 := uint8(AuthenStatusPass)
+	if reply.Status != tv4608_1 {
+		t.Errorf("got %v, want %v", reply.Status, tv4608_1)
+	}
 }
 
 func TestServeConnRepeatedShutdownWaitsForHandlers(t *testing.T) {
@@ -4628,16 +5699,25 @@ func TestServeConnRepeatedShutdownWaitsForHandlers(t *testing.T) {
 
 	firstCtx, firstCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer firstCancel()
-	assert.ErrorIs(t, server.Shutdown(firstCtx), context.DeadlineExceeded)
+	tv4631_1 := server.Shutdown(firstCtx)
+	if !errors.Is(tv4631_1, context.DeadlineExceeded) {
+		t.Errorf("error %v is not %v", tv4631_1, context.DeadlineExceeded)
+	}
 
 	secondCtx, secondCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer secondCancel()
-	assert.ErrorIs(t, server.Shutdown(secondCtx), context.DeadlineExceeded)
+	tv4635_1 := server.Shutdown(secondCtx)
+	if !errors.Is(tv4635_1, context.DeadlineExceeded) {
+		t.Errorf("error %v is not %v", tv4635_1, context.DeadlineExceeded)
+	}
 
 	close(releaseHandler)
 	finalCtx, finalCancel := context.WithTimeout(context.Background(), time.Second)
 	defer finalCancel()
-	require.NoError(t, server.Shutdown(finalCtx))
+	tv4640_1 := server.Shutdown(finalCtx)
+	if tv4640_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4640_1)
+	}
 	<-clientDone
 	cleanup()
 }
@@ -4657,7 +5737,9 @@ func sendPAPStart(t *testing.T, conn net.Conn, secret []byte, sessionID uint32, 
 		Data:       []byte(pass),
 	}
 	body, err := start.MarshalBinary()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	header := &Header{
 		Version:   0xc1,
@@ -4667,16 +5749,29 @@ func sendPAPStart(t *testing.T, conn net.Conn, secret []byte, sessionID uint32, 
 		Length:    uint32(len(body)),
 	}
 	headerBuf, err := header.MarshalBinary()
-	require.NoError(t, err)
-	require.NoError(t, WriteRawPacket(conn, headerBuf, Obfuscate(header, secret, body)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tv4671_1 := WriteRawPacket(conn, headerBuf, Obfuscate(header, secret, body))
+	if tv4671_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4671_1)
+	}
 
 	rawHeader, rawBody, err := ReadRawPacket(conn, DefaultMaxBodyLength)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	respHeader := &Header{}
-	require.NoError(t, respHeader.UnmarshalBinary(rawHeader))
+	tv4677_1 := respHeader.UnmarshalBinary(rawHeader)
+	if tv4677_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4677_1)
+	}
 	reply := &AuthenReply{}
-	require.NoError(t, reply.UnmarshalBinary(Obfuscate(respHeader, secret, rawBody)))
+	tv4679_1 := reply.UnmarshalBinary(Obfuscate(respHeader, secret, rawBody))
+	if tv4679_1 != nil {
+		t.Fatalf("unexpected error: %v", tv4679_1)
+	}
 	return reply
 }
 
@@ -4721,7 +5816,9 @@ func TestServeConnConcurrentIsolation(t *testing.T) {
 	wg.Wait()
 
 	for i, err := range errs {
-		assert.NoErrorf(t, err, "concurrent connection %d", i)
+		if err != nil {
+			t.Errorf("concurrent connection %d: unexpected error: %v", i, err)
+		}
 	}
 }
 

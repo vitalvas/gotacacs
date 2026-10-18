@@ -6,9 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestObfuscate(t *testing.T) {
@@ -23,9 +20,15 @@ func TestObfuscate(t *testing.T) {
 
 		obfuscated := Obfuscate(header, secret, body)
 
-		assert.NotNil(t, obfuscated)
-		assert.Len(t, obfuscated, len(body))
-		assert.NotEqual(t, body, obfuscated)
+		if obfuscated == nil {
+			t.Errorf("expected non-nil")
+		}
+		if len(obfuscated) != len(body) {
+			t.Errorf("len = %d, want %d", len(obfuscated), len(body))
+		}
+		if bytes.Equal(body, obfuscated) {
+			t.Errorf("should not equal %v", body)
+		}
 	})
 
 	t.Run("empty secret returns unchanged body", func(t *testing.T) {
@@ -37,10 +40,14 @@ func TestObfuscate(t *testing.T) {
 		body := []byte("hello world")
 
 		obfuscated := Obfuscate(header, nil, body)
-		assert.Equal(t, body, obfuscated)
+		if !bytes.Equal(obfuscated, body) {
+			t.Errorf("got %v, want %v", obfuscated, body)
+		}
 
 		obfuscated = Obfuscate(header, []byte{}, body)
-		assert.Equal(t, body, obfuscated)
+		if !bytes.Equal(obfuscated, body) {
+			t.Errorf("got %v, want %v", obfuscated, body)
+		}
 	})
 
 	t.Run("unencrypted flag returns unchanged body", func(t *testing.T) {
@@ -54,7 +61,9 @@ func TestObfuscate(t *testing.T) {
 		body := []byte("hello world")
 
 		obfuscated := Obfuscate(header, secret, body)
-		assert.Equal(t, body, obfuscated)
+		if !bytes.Equal(obfuscated, body) {
+			t.Errorf("got %v, want %v", obfuscated, body)
+		}
 	})
 
 	t.Run("empty body returns empty", func(t *testing.T) {
@@ -66,10 +75,14 @@ func TestObfuscate(t *testing.T) {
 		secret := []byte("testsecret")
 
 		obfuscated := Obfuscate(header, secret, []byte{})
-		assert.Equal(t, []byte{}, obfuscated)
+		if !bytes.Equal(obfuscated, []byte{}) {
+			t.Errorf("got %v, want %v", obfuscated, []byte{})
+		}
 
 		obfuscated = Obfuscate(header, secret, nil)
-		assert.Nil(t, obfuscated)
+		if obfuscated != nil {
+			t.Errorf("expected nil, got %v", obfuscated)
+		}
 	})
 }
 
@@ -145,11 +158,17 @@ func TestObfuscateRoundtrip(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			obfuscated := Obfuscate(tc.header, tc.secret, tc.body)
-			require.NotNil(t, obfuscated)
-			require.Len(t, obfuscated, len(tc.body))
+			if obfuscated == nil {
+				t.Fatal("expected non-nil")
+			}
+			if len(obfuscated) != len(tc.body) {
+				t.Fatalf("len = %d, want %d", len(obfuscated), len(tc.body))
+			}
 
 			deobfuscated := Obfuscate(tc.header, tc.secret, obfuscated)
-			assert.Equal(t, tc.body, deobfuscated)
+			if !bytes.Equal(deobfuscated, tc.body) {
+				t.Errorf("got %v, want %v", deobfuscated, tc.body)
+			}
 		})
 	}
 }
@@ -164,7 +183,9 @@ func TestObfuscateDifferentInputsProduceDifferentOutputs(t *testing.T) {
 		o1 := Obfuscate(h1, secret, body)
 		o2 := Obfuscate(h2, secret, body)
 
-		assert.NotEqual(t, o1, o2)
+		if bytes.Equal(o1, o2) {
+			t.Errorf("should not equal %v", o1)
+		}
 	})
 
 	t.Run("different secrets", func(t *testing.T) {
@@ -174,7 +195,9 @@ func TestObfuscateDifferentInputsProduceDifferentOutputs(t *testing.T) {
 		o1 := Obfuscate(header, []byte("secret1"), body)
 		o2 := Obfuscate(header, []byte("secret2"), body)
 
-		assert.NotEqual(t, o1, o2)
+		if bytes.Equal(o1, o2) {
+			t.Errorf("should not equal %v", o1)
+		}
 	})
 
 	t.Run("different sequence numbers", func(t *testing.T) {
@@ -186,7 +209,9 @@ func TestObfuscateDifferentInputsProduceDifferentOutputs(t *testing.T) {
 		o1 := Obfuscate(h1, secret, body)
 		o2 := Obfuscate(h2, secret, body)
 
-		assert.NotEqual(t, o1, o2)
+		if bytes.Equal(o1, o2) {
+			t.Errorf("should not equal %v", o1)
+		}
 	})
 
 	t.Run("different versions", func(t *testing.T) {
@@ -198,7 +223,9 @@ func TestObfuscateDifferentInputsProduceDifferentOutputs(t *testing.T) {
 		o1 := Obfuscate(h1, secret, body)
 		o2 := Obfuscate(h2, secret, body)
 
-		assert.NotEqual(t, o1, o2)
+		if bytes.Equal(o1, o2) {
+			t.Errorf("should not equal %v", o1)
+		}
 	})
 }
 
@@ -226,7 +253,9 @@ func TestGeneratePseudoPad(t *testing.T) {
 
 		// Generate pad and verify first 16 bytes match
 		pad := generatePseudoPad(header, secret, 16)
-		assert.Equal(t, expectedFirstBlock, pad)
+		if !bytes.Equal(pad, expectedFirstBlock) {
+			t.Errorf("got %v, want %v", pad, expectedFirstBlock)
+		}
 	})
 
 	t.Run("pad length matches requested length", func(t *testing.T) {
@@ -235,7 +264,9 @@ func TestGeneratePseudoPad(t *testing.T) {
 
 		for _, length := range []int{1, 5, 15, 16, 17, 32, 48, 100, 1000} {
 			pad := generatePseudoPad(header, secret, length)
-			assert.Len(t, pad, length)
+			if len(pad) != length {
+				t.Errorf("len = %d, want %d", len(pad), length)
+			}
 		}
 	})
 
@@ -244,7 +275,9 @@ func TestGeneratePseudoPad(t *testing.T) {
 		secret := []byte("secret")
 
 		pad := generatePseudoPad(header, secret, 0)
-		assert.Nil(t, pad)
+		if pad != nil {
+			t.Errorf("expected nil, got %v", pad)
+		}
 	})
 
 	t.Run("consecutive blocks are chained", func(t *testing.T) {
@@ -277,7 +310,9 @@ func TestGeneratePseudoPad(t *testing.T) {
 		expected := make([]byte, 0, 32)
 		expected = append(expected, firstBlock...)
 		expected = append(expected, secondBlock...)
-		assert.Equal(t, expected, pad)
+		if !bytes.Equal(pad, expected) {
+			t.Errorf("got %v, want %v", pad, expected)
+		}
 	})
 }
 
@@ -291,7 +326,9 @@ func TestObfuscateDoesNotModifyOriginal(t *testing.T) {
 
 		_ = Obfuscate(header, secret, original)
 
-		assert.Equal(t, bodyCopy, original)
+		if !bytes.Equal(original, bodyCopy) {
+			t.Errorf("got %v, want %v", original, bodyCopy)
+		}
 	})
 
 	t.Run("original secret unchanged", func(t *testing.T) {
@@ -303,7 +340,9 @@ func TestObfuscateDoesNotModifyOriginal(t *testing.T) {
 
 		_ = Obfuscate(header, secret, body)
 
-		assert.Equal(t, secretCopy, secret)
+		if !bytes.Equal(secret, secretCopy) {
+			t.Errorf("got %v, want %v", secret, secretCopy)
+		}
 	})
 }
 
@@ -314,7 +353,9 @@ func TestObfuscateXORProperties(t *testing.T) {
 		body := []byte("original data here")
 
 		doubleObfuscated := Obfuscate(header, secret, Obfuscate(header, secret, body))
-		assert.Equal(t, body, doubleObfuscated)
+		if !bytes.Equal(doubleObfuscated, body) {
+			t.Errorf("got %v, want %v", doubleObfuscated, body)
+		}
 	})
 
 	t.Run("obfuscating zeros reveals pad", func(t *testing.T) {
@@ -325,7 +366,9 @@ func TestObfuscateXORProperties(t *testing.T) {
 		obfuscated := Obfuscate(header, secret, zeros)
 		pad := generatePseudoPad(header, secret, 32)
 
-		assert.Equal(t, pad, obfuscated)
+		if !bytes.Equal(obfuscated, pad) {
+			t.Errorf("got %v, want %v", obfuscated, pad)
+		}
 	})
 }
 
@@ -336,10 +379,14 @@ func TestObfuscateEdgeCases(t *testing.T) {
 		body := []byte{0x42}
 
 		obfuscated := Obfuscate(header, secret, body)
-		assert.Len(t, obfuscated, 1)
+		if len(obfuscated) != 1 {
+			t.Errorf("len = %d, want %d", len(obfuscated), 1)
+		}
 
 		deobfuscated := Obfuscate(header, secret, obfuscated)
-		assert.Equal(t, body, deobfuscated)
+		if !bytes.Equal(deobfuscated, body) {
+			t.Errorf("got %v, want %v", deobfuscated, body)
+		}
 	})
 
 	t.Run("single byte secret", func(t *testing.T) {
@@ -349,7 +396,9 @@ func TestObfuscateEdgeCases(t *testing.T) {
 
 		obfuscated := Obfuscate(header, secret, body)
 		deobfuscated := Obfuscate(header, secret, obfuscated)
-		assert.Equal(t, body, deobfuscated)
+		if !bytes.Equal(deobfuscated, body) {
+			t.Errorf("got %v, want %v", deobfuscated, body)
+		}
 	})
 
 	t.Run("long secret", func(t *testing.T) {
@@ -359,7 +408,9 @@ func TestObfuscateEdgeCases(t *testing.T) {
 
 		obfuscated := Obfuscate(header, secret, body)
 		deobfuscated := Obfuscate(header, secret, obfuscated)
-		assert.Equal(t, body, deobfuscated)
+		if !bytes.Equal(deobfuscated, body) {
+			t.Errorf("got %v, want %v", deobfuscated, body)
+		}
 	})
 
 	t.Run("session ID zero", func(t *testing.T) {
@@ -369,7 +420,9 @@ func TestObfuscateEdgeCases(t *testing.T) {
 
 		obfuscated := Obfuscate(header, secret, body)
 		deobfuscated := Obfuscate(header, secret, obfuscated)
-		assert.Equal(t, body, deobfuscated)
+		if !bytes.Equal(deobfuscated, body) {
+			t.Errorf("got %v, want %v", deobfuscated, body)
+		}
 	})
 
 	t.Run("max session ID", func(t *testing.T) {
@@ -379,7 +432,9 @@ func TestObfuscateEdgeCases(t *testing.T) {
 
 		obfuscated := Obfuscate(header, secret, body)
 		deobfuscated := Obfuscate(header, secret, obfuscated)
-		assert.Equal(t, body, deobfuscated)
+		if !bytes.Equal(deobfuscated, body) {
+			t.Errorf("got %v, want %v", deobfuscated, body)
+		}
 	})
 }
 
@@ -421,33 +476,53 @@ func TestTacquitoInteroperability(t *testing.T) {
 	// Parse the header from encrypted bytes
 	header := &Header{}
 	err := header.UnmarshalBinary(encrypted[:HeaderLength])
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Verify header values
-	assert.Equal(t, uint8(0xc1), header.Version)
-	assert.Equal(t, uint8(PacketTypeAuthen), header.Type)
-	assert.Equal(t, uint8(1), header.SeqNo)
-	assert.Equal(t, uint8(0), header.Flags)
-	assert.Equal(t, uint32(12345), header.SessionID) // 0x3039 = 12345
-	assert.Equal(t, uint32(44), header.Length)       // 0x2c = 44
+	if header.Version != uint8(0xc1) {
+		t.Errorf("got %v, want %v", header.Version, uint8(0xc1))
+	}
+	if header.Type != uint8(PacketTypeAuthen) {
+		t.Errorf("got %v, want %v", header.Type, uint8(PacketTypeAuthen))
+	}
+	if header.SeqNo != uint8(1) {
+		t.Errorf("got %v, want %v", header.SeqNo, uint8(1))
+	}
+	if header.Flags != uint8(0) {
+		t.Errorf("got %v, want %v", header.Flags, uint8(0))
+	}
+	if header.SessionID != uint32(12345) { // 0x3039 = 12345
+		t.Errorf("got %v, want %v", header.SessionID, uint32(12345))
+	}
+	if header.Length != uint32(44) { // 0x2c = 44
+		t.Errorf("got %v, want %v", header.Length, uint32(44))
+	}
 
 	t.Run("decrypt tacquito encrypted packet", func(t *testing.T) {
 		encryptedBody := encrypted[HeaderLength:]
 		result := Obfuscate(header, secret, encryptedBody)
-		assert.Equal(t, decrypted, result, "decrypted body should match tacquito test vector")
+		if !bytes.Equal(result, decrypted) {
+			t.Errorf("decrypted body should match tacquito test vector: got %v, want %v", result, decrypted)
+		}
 	})
 
 	t.Run("encrypt to match tacquito ciphertext", func(t *testing.T) {
 		result := Obfuscate(header, secret, decrypted)
 		expectedCiphertext := encrypted[HeaderLength:]
-		assert.Equal(t, expectedCiphertext, result, "encrypted body should match tacquito ciphertext")
+		if !bytes.Equal(result, expectedCiphertext) {
+			t.Errorf("encrypted body should match tacquito ciphertext: got %v, want %v", result, expectedCiphertext)
+		}
 	})
 
 	t.Run("roundtrip with tacquito data", func(t *testing.T) {
 		encryptedBody := encrypted[HeaderLength:]
 		decryptedResult := Obfuscate(header, secret, encryptedBody)
 		reencrypted := Obfuscate(header, secret, decryptedResult)
-		assert.Equal(t, encryptedBody, reencrypted, "re-encrypted should match original ciphertext")
+		if !bytes.Equal(reencrypted, encryptedBody) {
+			t.Errorf("re-encrypted should match original ciphertext: got %v, want %v", reencrypted, encryptedBody)
+		}
 	})
 
 	t.Run("parse decrypted as AuthenStart", func(t *testing.T) {
@@ -456,16 +531,34 @@ func TestTacquitoInteroperability(t *testing.T) {
 
 		start := &AuthenStart{}
 		err := start.UnmarshalBinary(decryptedBody)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint8(AuthenActionLogin), start.Action)
-		assert.Equal(t, uint8(1), start.PrivLevel) // PrivLvlUser
-		assert.Equal(t, uint8(AuthenTypeASCII), start.AuthenType)
-		assert.Equal(t, uint8(AuthenServiceLogin), start.Service)
-		assert.Equal(t, "admin", string(start.User))
-		assert.Equal(t, "command-api", string(start.Port))
-		assert.Equal(t, "2001:4860:4860::8888", string(start.RemoteAddr))
-		assert.Nil(t, start.Data)
+		if start.Action != uint8(AuthenActionLogin) {
+			t.Errorf("got %v, want %v", start.Action, uint8(AuthenActionLogin))
+		}
+		if start.PrivLevel != uint8(1) { // PrivLvlUser
+			t.Errorf("got %v, want %v", start.PrivLevel, uint8(1))
+		}
+		if start.AuthenType != uint8(AuthenTypeASCII) {
+			t.Errorf("got %v, want %v", start.AuthenType, uint8(AuthenTypeASCII))
+		}
+		if start.Service != uint8(AuthenServiceLogin) {
+			t.Errorf("got %v, want %v", start.Service, uint8(AuthenServiceLogin))
+		}
+		if string(start.User) != "admin" {
+			t.Errorf("got %v, want %v", string(start.User), "admin")
+		}
+		if string(start.Port) != "command-api" {
+			t.Errorf("got %v, want %v", string(start.Port), "command-api")
+		}
+		if string(start.RemoteAddr) != "2001:4860:4860::8888" {
+			t.Errorf("got %v, want %v", string(start.RemoteAddr), "2001:4860:4860::8888")
+		}
+		if start.Data != nil {
+			t.Errorf("expected nil, got %v", start.Data)
+		}
 	})
 
 	t.Run("create matching packet from scratch", func(t *testing.T) {
@@ -481,13 +574,19 @@ func TestTacquitoInteroperability(t *testing.T) {
 		}
 
 		body, err := start.MarshalBinary()
-		require.NoError(t, err)
-		assert.Equal(t, decrypted, body, "marshaled body should match tacquito decrypted bytes")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(body, decrypted) {
+			t.Errorf("marshaled body should match tacquito decrypted bytes: got %v, want %v", body, decrypted)
+		}
 
 		// Encrypt with the same header and secret
 		ciphertext := Obfuscate(header, secret, body)
 		expectedCiphertext := encrypted[HeaderLength:]
-		assert.Equal(t, expectedCiphertext, ciphertext, "ciphertext should match tacquito encrypted bytes")
+		if !bytes.Equal(ciphertext, expectedCiphertext) {
+			t.Errorf("ciphertext should match tacquito encrypted bytes: got %v, want %v", ciphertext, expectedCiphertext)
+		}
 	})
 }
 
@@ -500,7 +599,9 @@ func TestTacquitoSecretMismatch(t *testing.T) {
 		ServerMsg: []byte("\nUser Access Verification\n\nUsername:"),
 	}
 	plaintext, err := body.MarshalBinary()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	header := &Header{
 		Version:   0xc1,
@@ -525,8 +626,9 @@ func TestTacquitoSecretMismatch(t *testing.T) {
 	// The packet might parse but will have wrong values
 	if err == nil {
 		// If it parsed, the values should be wrong
-		assert.NotEqual(t, body.Status, decrypted.Status,
-			"wrong secret should produce different status")
+		if body.Status == decrypted.Status {
+			t.Errorf("wrong secret should produce different status: should not equal %v", body.Status)
+		}
 	}
 	// If it didn't parse, that's also correct behavior (bad secret detected)
 }
@@ -540,7 +642,9 @@ func TestTacquitoUnencryptedFlag(t *testing.T) {
 		ServerMsg: []byte("\nUser Access Verification\n\nUsername:"),
 	}
 	plaintext, err := body.MarshalBinary()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	header := &Header{
 		Version:   0xc1,
@@ -555,11 +659,15 @@ func TestTacquitoUnencryptedFlag(t *testing.T) {
 
 	// With UnencryptedFlag set, body should remain unchanged
 	result := Obfuscate(header, secret, plaintext)
-	assert.Equal(t, plaintext, result, "UnencryptedFlag should prevent obfuscation")
+	if !bytes.Equal(result, plaintext) {
+		t.Errorf("UnencryptedFlag should prevent obfuscation: got %v, want %v", result, plaintext)
+	}
 
 	// Double-apply should still return original
 	result2 := Obfuscate(header, secret, result)
-	assert.Equal(t, plaintext, result2, "UnencryptedFlag should prevent obfuscation on second call")
+	if !bytes.Equal(result2, plaintext) {
+		t.Errorf("UnencryptedFlag should prevent obfuscation on second call: got %v, want %v", result2, plaintext)
+	}
 }
 
 func byteSizeName(size int) string {

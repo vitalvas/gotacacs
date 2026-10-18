@@ -1,6 +1,7 @@
 package gotacacs
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,21 +9,22 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"io"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestTCPDialer(t *testing.T) {
 	t.Run("dial successful connection", func(t *testing.T) {
 		// Start a test server
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -34,8 +36,12 @@ func TestTCPDialer(t *testing.T) {
 
 		dialer := &TCPDialer{Timeout: 5 * time.Second}
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
-		require.NotNil(t, conn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if conn == nil {
+			t.Fatal("expected non-nil")
+		}
 		conn.Close()
 	})
 
@@ -47,13 +53,17 @@ func TestTCPDialer(t *testing.T) {
 		defer cancel()
 
 		_, err := dialer.Dial(ctx, "tcp", "10.255.255.1:49")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("dial connection refused", func(t *testing.T) {
 		dialer := &TCPDialer{Timeout: 1 * time.Second}
 		_, err := dialer.Dial(context.Background(), "tcp", "127.0.0.1:1")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
@@ -61,7 +71,9 @@ func TestTLSDialer(t *testing.T) {
 	t.Run("dial with TLS", func(t *testing.T) {
 		// Generate test certificate
 		cert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -70,7 +82,9 @@ func TestTLSDialer(t *testing.T) {
 
 		// Start TLS server
 		ln, err := tls.Listen("tcp", "127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		serverDone := make(chan struct{})
@@ -96,8 +110,12 @@ func TestTLSDialer(t *testing.T) {
 		}
 
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
-		require.NotNil(t, conn)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if conn == nil {
+			t.Fatal("expected non-nil")
+		}
 		conn.Write([]byte{0x00}) // Trigger server read
 		conn.Close()
 		<-serverDone
@@ -109,21 +127,31 @@ func TestTLSDialer(t *testing.T) {
 			Config:  &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13},
 		}
 		_, err := dialer.Dial(context.Background(), "tcp", "127.0.0.1:1")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
 func TestListenTCP(t *testing.T) {
 	t.Run("listen and accept", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
-		require.NotNil(t, ln)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ln == nil {
+			t.Fatal("expected non-nil")
+		}
 		defer ln.Close()
 
 		// Check address
 		addr := ln.Addr()
-		assert.NotNil(t, addr)
-		assert.Contains(t, addr.String(), "127.0.0.1")
+		if addr == nil {
+			t.Errorf("expected non-nil")
+		}
+		if !strings.Contains(addr.String(), "127.0.0.1") {
+			t.Errorf("expected %q to contain %q", addr.String(), "127.0.0.1")
+		}
 
 		// Accept in goroutine
 		acceptDone := make(chan struct{})
@@ -138,7 +166,9 @@ func TestListenTCP(t *testing.T) {
 		// Connect
 		dialer := &TCPDialer{Timeout: 30 * time.Second}
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		conn.Close()
 
 		<-acceptDone
@@ -146,56 +176,76 @@ func TestListenTCP(t *testing.T) {
 
 	t.Run("listen on invalid address", func(t *testing.T) {
 		_, err := ListenTCP("invalid:address:format")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
 func TestListenTLS(t *testing.T) {
 	t.Run("listen with TLS", func(t *testing.T) {
 		cert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		config := &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		}
 
 		ln, err := ListenTLS("127.0.0.1:0", config)
-		require.NoError(t, err)
-		require.NotNil(t, ln)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ln == nil {
+			t.Fatal("expected non-nil")
+		}
 		defer ln.Close()
 
 		addr := ln.Addr()
-		assert.NotNil(t, addr)
+		if addr == nil {
+			t.Errorf("expected non-nil")
+		}
 	})
 
 	t.Run("listen TLS without config", func(t *testing.T) {
 		_, err := ListenTLS("127.0.0.1:0", nil)
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("listen TLS on invalid address", func(t *testing.T) {
 		config := &tls.Config{}
 		_, err := ListenTLS("invalid:address:format", config)
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
 func TestTCPListenerAcceptClose(t *testing.T) {
 	t.Run("accept after close returns error", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		ln.Close()
 
 		_, err = ln.Accept()
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
 func TestConnInterface(t *testing.T) {
 	t.Run("net.Conn works as connection type", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -207,25 +257,43 @@ func TestConnInterface(t *testing.T) {
 		}()
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.NotNil(t, conn.LocalAddr())
-		assert.NotNil(t, conn.RemoteAddr())
+		if conn.LocalAddr() == nil {
+			t.Errorf("expected non-nil")
+		}
+		if conn.RemoteAddr() == nil {
+			t.Errorf("expected non-nil")
+		}
 
 		err = conn.SetDeadline(time.Now().Add(time.Second))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 
 		err = conn.SetReadDeadline(time.Now().Add(time.Second))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 
 		err = conn.SetWriteDeadline(time.Now().Add(time.Second))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 
 		buf := make([]byte, 4)
 		n, err := conn.Read(buf)
-		assert.NoError(t, err)
-		assert.Equal(t, 4, n)
-		assert.Equal(t, []byte("test"), buf)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if n != 4 {
+			t.Errorf("got %v, want %v", n, 4)
+		}
+		if !bytes.Equal(buf, []byte("test")) {
+			t.Errorf("got %v, want %v", buf, []byte("test"))
+		}
 
 		conn.Close()
 	})
@@ -244,11 +312,15 @@ func TestDialerInterface(t *testing.T) {
 func TestListenerInterface(t *testing.T) {
 	t.Run("net.Listener implements Listener", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		// Verify it implements Listener by calling interface methods
-		assert.NotNil(t, ln.Addr())
+		if ln.Addr() == nil {
+			t.Errorf("expected non-nil")
+		}
 	})
 }
 
@@ -269,11 +341,17 @@ func TestWriteAll(t *testing.T) {
 		// Read all data on server side
 		buf := make([]byte, len(data))
 		_, err := server.Read(buf)
-		require.NoError(t, err)
-		assert.Equal(t, data, buf)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(buf, data) {
+			t.Errorf("got %v, want %v", buf, data)
+		}
 
 		err = <-done
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 
 	t.Run("write empty data", func(t *testing.T) {
@@ -282,7 +360,9 @@ func TestWriteAll(t *testing.T) {
 		defer client.Close()
 
 		err := writeAll(client, []byte{})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 
 	t.Run("write to closed connection", func(t *testing.T) {
@@ -290,7 +370,9 @@ func TestWriteAll(t *testing.T) {
 		server.Close()
 
 		err := writeAll(client, []byte("test"))
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 		client.Close()
 	})
 
@@ -299,7 +381,9 @@ func TestWriteAll(t *testing.T) {
 		mockConn := &zeroWriteConn{}
 
 		err := writeAll(mockConn, []byte("test"))
-		assert.ErrorIs(t, err, io.ErrShortWrite)
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Errorf("error %v is not %v", err, io.ErrShortWrite)
+		}
 	})
 }
 
@@ -315,14 +399,18 @@ func (c *zeroWriteConn) Write([]byte) (int, error) {
 func TestIsTLSConn(t *testing.T) {
 	t.Run("TLS connection returns true", func(t *testing.T) {
 		cert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		}
 
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		serverDone := make(chan net.Conn)
@@ -342,24 +430,32 @@ func TestIsTLSConn(t *testing.T) {
 		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
 
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		// Trigger handshake completion
 		conn.Write([]byte{0x00})
 
-		assert.True(t, IsTLSConn(conn), "TLS dialer connection should be TLS")
+		if !IsTLSConn(conn) {
+			t.Errorf("TLS dialer connection should be TLS")
+		}
 
 		serverConn := <-serverDone
 		if serverConn != nil {
 			defer serverConn.Close()
-			assert.True(t, IsTLSConn(serverConn), "TLS listener connection should be TLS")
+			if !IsTLSConn(serverConn) {
+				t.Errorf("TLS listener connection should be TLS")
+			}
 		}
 	})
 
 	t.Run("TCP connection returns false", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -371,21 +467,29 @@ func TestIsTLSConn(t *testing.T) {
 
 		dialer := &TCPDialer{Timeout: 5 * time.Second}
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
-		assert.False(t, IsTLSConn(conn), "TCP connection should not be TLS")
+		if IsTLSConn(conn) {
+			t.Errorf("TCP connection should not be TLS")
+		}
 	})
 }
 
 func TestTLSConnInterface(t *testing.T) {
 	t.Run("tls.Conn implements TLSConn interface", func(t *testing.T) {
 		cert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 		ln, err := ListenTLS("127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -401,16 +505,22 @@ func TestTLSConnInterface(t *testing.T) {
 		dialer := &TLSDialer{Timeout: 5 * time.Second, Config: clientConfig}
 
 		conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer conn.Close()
 
 		// Verify it implements TLSConn
 		tlsConn, ok := conn.(TLSConn)
-		require.True(t, ok, "should implement TLSConn interface")
+		if !ok {
+			t.Fatal("should implement TLSConn interface")
+		}
 
 		// Verify ConnectionState works
 		state := tlsConn.ConnectionState()
-		assert.True(t, state.HandshakeComplete, "handshake should be complete")
+		if !state.HandshakeComplete {
+			t.Errorf("handshake should be complete")
+		}
 
 		conn.Write([]byte{0x00})
 	})

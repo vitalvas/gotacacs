@@ -3,9 +3,8 @@ package gotacacs
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func TestErrorDefinitions(t *testing.T) {
@@ -32,8 +31,12 @@ func TestErrorDefinitions(t *testing.T) {
 		}
 
 		for _, err := range errs {
-			assert.NotNil(t, err)
-			assert.NotEmpty(t, err.Error())
+			if err == nil {
+				t.Errorf("expected non-nil")
+			}
+			if len(err.Error()) == 0 {
+				t.Errorf("expected non-empty")
+			}
 		}
 	})
 
@@ -61,8 +64,8 @@ func TestErrorDefinitions(t *testing.T) {
 
 		for i, err1 := range errs {
 			for j, err2 := range errs {
-				if i != j {
-					assert.NotEqual(t, err1, err2)
+				if i != j && err1 == err2 {
+					t.Errorf("should not equal %v", err1)
 				}
 			}
 		}
@@ -72,25 +75,37 @@ func TestErrorDefinitions(t *testing.T) {
 func TestErrorWrapping(t *testing.T) {
 	t.Run("wrap and unwrap ErrInvalidHeader", func(t *testing.T) {
 		wrapped := fmt.Errorf("custom context: %w", ErrInvalidHeader)
-		assert.True(t, errors.Is(wrapped, ErrInvalidHeader))
-		assert.Contains(t, wrapped.Error(), "custom context")
-		assert.Contains(t, wrapped.Error(), ErrInvalidHeader.Error())
+		if !errors.Is(wrapped, ErrInvalidHeader) {
+			t.Errorf("expected true")
+		}
+		if !strings.Contains(wrapped.Error(), "custom context") {
+			t.Errorf("expected %q to contain %q", wrapped.Error(), "custom context")
+		}
+		if !strings.Contains(wrapped.Error(), ErrInvalidHeader.Error()) {
+			t.Errorf("expected %q to contain %q", wrapped.Error(), ErrInvalidHeader.Error())
+		}
 	})
 
 	t.Run("wrap and unwrap ErrInvalidVersion", func(t *testing.T) {
 		wrapped := fmt.Errorf("version mismatch: %w", ErrInvalidVersion)
-		assert.True(t, errors.Is(wrapped, ErrInvalidVersion))
+		if !errors.Is(wrapped, ErrInvalidVersion) {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("wrap and unwrap ErrBufferTooShort", func(t *testing.T) {
 		wrapped := fmt.Errorf("need 12 bytes: %w", ErrBufferTooShort)
-		assert.True(t, errors.Is(wrapped, ErrBufferTooShort))
+		if !errors.Is(wrapped, ErrBufferTooShort) {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("nested wrapping", func(t *testing.T) {
 		inner := fmt.Errorf("inner: %w", ErrInvalidPacket)
 		outer := fmt.Errorf("outer: %w", inner)
-		assert.True(t, errors.Is(outer, ErrInvalidPacket))
+		if !errors.Is(outer, ErrInvalidPacket) {
+			t.Errorf("expected true")
+		}
 	})
 }
 
@@ -121,7 +136,9 @@ func TestErrorMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.message, func(t *testing.T) {
-			assert.Equal(t, tt.message, tt.err.Error())
+			if got := tt.err.Error(); got != tt.message {
+				t.Errorf("got %v, want %v", got, tt.message)
+			}
 		})
 	}
 }

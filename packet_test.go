@@ -1,11 +1,10 @@
 package gotacacs
 
 import (
+	"bytes"
 	"errors"
+	"reflect"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPacketInterfaceCompliance(t *testing.T) {
@@ -24,13 +23,19 @@ func TestPacketInterfaceCompliance(t *testing.T) {
 		t.Run("implements Packet interface", func(t *testing.T) {
 			// Test MarshalBinary
 			data, err := p.MarshalBinary()
-			require.NoError(t, err)
-			require.NotNil(t, data)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if data == nil {
+				t.Fatal("expected non-nil")
+			}
 
 			// Test UnmarshalBinary roundtrip
 			newPacket := createPacketOfSameType(p)
 			err = newPacket.UnmarshalBinary(data)
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 		})
 	}
 }
@@ -52,13 +57,19 @@ func TestPacketUnmarshalRejectsTrailingBytes(t *testing.T) {
 	for _, tc := range packets {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := tc.packet.MarshalBinary()
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			decoded := createPacketOfSameType(tc.packet)
 			err = decoded.UnmarshalBinary(append(data, 0x00))
 
-			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrInvalidPacket)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !errors.Is(err, ErrInvalidPacket) {
+				t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+			}
 		})
 	}
 }
@@ -94,14 +105,22 @@ func TestParseAuthenPacket(t *testing.T) {
 			User:       []byte("testuser"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthenPacket(1, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		start, ok := p.(*AuthenStart)
-		require.True(t, ok, "expected *AuthenStart")
-		assert.Equal(t, original.User, start.User)
+		if !ok {
+			t.Fatal("expected *AuthenStart")
+		}
+		if !bytes.Equal(start.User, original.User) {
+			t.Errorf("got %v, want %v", start.User, original.User)
+		}
 	})
 
 	t.Run("parse REPLY (seq=2)", func(t *testing.T) {
@@ -110,14 +129,22 @@ func TestParseAuthenPacket(t *testing.T) {
 			ServerMsg: []byte("Welcome"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthenPacket(2, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		reply, ok := p.(*AuthenReply)
-		require.True(t, ok, "expected *AuthenReply")
-		assert.Equal(t, original.Status, reply.Status)
+		if !ok {
+			t.Fatal("expected *AuthenReply")
+		}
+		if reply.Status != original.Status {
+			t.Errorf("got %v, want %v", reply.Status, original.Status)
+		}
 	})
 
 	t.Run("parse CONTINUE (seq=3)", func(t *testing.T) {
@@ -125,14 +152,22 @@ func TestParseAuthenPacket(t *testing.T) {
 			UserMsg: []byte("password123"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthenPacket(3, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		cont, ok := p.(*AuthenContinue)
-		require.True(t, ok, "expected *AuthenContinue")
-		assert.Equal(t, original.UserMsg, cont.UserMsg)
+		if !ok {
+			t.Fatal("expected *AuthenContinue")
+		}
+		if !bytes.Equal(cont.UserMsg, original.UserMsg) {
+			t.Errorf("got %v, want %v", cont.UserMsg, original.UserMsg)
+		}
 	})
 
 	t.Run("parse REPLY (seq=4)", func(t *testing.T) {
@@ -141,13 +176,19 @@ func TestParseAuthenPacket(t *testing.T) {
 			Flags:  AuthenReplyFlagNoEcho,
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthenPacket(4, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		_, ok := p.(*AuthenReply)
-		require.True(t, ok, "expected *AuthenReply for even seq")
+		if !ok {
+			t.Fatal("expected *AuthenReply for even seq")
+		}
 	})
 
 	t.Run("parse CONTINUE (seq=5)", func(t *testing.T) {
@@ -155,37 +196,59 @@ func TestParseAuthenPacket(t *testing.T) {
 			UserMsg: []byte("response"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthenPacket(5, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		_, ok := p.(*AuthenContinue)
-		require.True(t, ok, "expected *AuthenContinue for odd seq > 1")
+		if !ok {
+			t.Fatal("expected *AuthenContinue for odd seq > 1")
+		}
 	})
 
 	t.Run("invalid sequence 0", func(t *testing.T) {
 		_, err := ParseAuthenPacket(0, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("invalid data for START", func(t *testing.T) {
 		_, err := ParseAuthenPacket(1, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("invalid data for REPLY", func(t *testing.T) {
 		_, err := ParseAuthenPacket(2, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("invalid data for CONTINUE", func(t *testing.T) {
 		_, err := ParseAuthenPacket(3, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 }
 
@@ -199,14 +262,22 @@ func TestParseAuthorPacket(t *testing.T) {
 			User:         []byte("testuser"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthorPacket(1, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		req, ok := p.(*AuthorRequest)
-		require.True(t, ok, "expected *AuthorRequest")
-		assert.Equal(t, original.User, req.User)
+		if !ok {
+			t.Fatal("expected *AuthorRequest")
+		}
+		if !bytes.Equal(req.User, original.User) {
+			t.Errorf("got %v, want %v", req.User, original.User)
+		}
 	})
 
 	t.Run("parse RESPONSE (seq=2)", func(t *testing.T) {
@@ -215,38 +286,62 @@ func TestParseAuthorPacket(t *testing.T) {
 			ServerMsg: []byte("Authorized"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAuthorPacket(2, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		resp, ok := p.(*AuthorResponse)
-		require.True(t, ok, "expected *AuthorResponse")
-		assert.Equal(t, original.Status, resp.Status)
+		if !ok {
+			t.Fatal("expected *AuthorResponse")
+		}
+		if resp.Status != original.Status {
+			t.Errorf("got %v, want %v", resp.Status, original.Status)
+		}
 	})
 
 	t.Run("invalid sequence 0", func(t *testing.T) {
 		_, err := ParseAuthorPacket(0, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("invalid sequence 3", func(t *testing.T) {
 		_, err := ParseAuthorPacket(3, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("invalid data for REQUEST", func(t *testing.T) {
 		_, err := ParseAuthorPacket(1, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("invalid data for RESPONSE", func(t *testing.T) {
 		_, err := ParseAuthorPacket(2, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 }
 
@@ -261,14 +356,22 @@ func TestParseAcctPacket(t *testing.T) {
 			User:         []byte("testuser"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAcctPacket(1, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		req, ok := p.(*AcctRequest)
-		require.True(t, ok, "expected *AcctRequest")
-		assert.Equal(t, original.Flags, req.Flags)
+		if !ok {
+			t.Fatal("expected *AcctRequest")
+		}
+		if req.Flags != original.Flags {
+			t.Errorf("got %v, want %v", req.Flags, original.Flags)
+		}
 	})
 
 	t.Run("parse REPLY (seq=2)", func(t *testing.T) {
@@ -277,38 +380,62 @@ func TestParseAcctPacket(t *testing.T) {
 			ServerMsg: []byte("Recorded"),
 		}
 		data, err := original.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		p, err := ParseAcctPacket(2, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		reply, ok := p.(*AcctReply)
-		require.True(t, ok, "expected *AcctReply")
-		assert.Equal(t, original.Status, reply.Status)
+		if !ok {
+			t.Fatal("expected *AcctReply")
+		}
+		if reply.Status != original.Status {
+			t.Errorf("got %v, want %v", reply.Status, original.Status)
+		}
 	})
 
 	t.Run("invalid sequence 0", func(t *testing.T) {
 		_, err := ParseAcctPacket(0, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("invalid sequence 3", func(t *testing.T) {
 		_, err := ParseAcctPacket(3, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidSequence))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("invalid data for REQUEST", func(t *testing.T) {
 		_, err := ParseAcctPacket(1, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("invalid data for REPLY", func(t *testing.T) {
 		_, err := ParseAcctPacket(2, []byte{0x01})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 }
 
@@ -324,9 +451,13 @@ func TestParsePacket(t *testing.T) {
 		data, _ := original.MarshalBinary()
 
 		p, err := ParsePacket(header, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		_, ok := p.(*AuthenStart)
-		assert.True(t, ok)
+		if !ok {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("parse authorization packet", func(t *testing.T) {
@@ -340,9 +471,13 @@ func TestParsePacket(t *testing.T) {
 		data, _ := original.MarshalBinary()
 
 		p, err := ParsePacket(header, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		_, ok := p.(*AuthorRequest)
-		assert.True(t, ok)
+		if !ok {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("parse accounting packet", func(t *testing.T) {
@@ -357,22 +492,34 @@ func TestParsePacket(t *testing.T) {
 		data, _ := original.MarshalBinary()
 
 		p, err := ParsePacket(header, data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		_, ok := p.(*AcctRequest)
-		assert.True(t, ok)
+		if !ok {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("nil header", func(t *testing.T) {
 		_, err := ParsePacket(nil, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidHeader))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidHeader) {
+			t.Errorf("error %v is not %v", err, ErrInvalidHeader)
+		}
 	})
 
 	t.Run("invalid packet type", func(t *testing.T) {
 		header := &Header{Type: 0xFF, SeqNo: 1}
 		_, err := ParsePacket(header, []byte{})
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidType))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidType) {
+			t.Errorf("error %v is not %v", err, ErrInvalidType)
+		}
 	})
 }
 
@@ -392,13 +539,17 @@ func TestPacketType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run("", func(t *testing.T) {
-			assert.Equal(t, tt.expected, PacketType(tt.packet))
+			if got := PacketType(tt.packet); got != tt.expected {
+				t.Errorf("got %v, want %v", got, tt.expected)
+			}
 		})
 	}
 
 	t.Run("unknown packet type returns 0", func(t *testing.T) {
 		// Use a mock type that implements Packet but isn't one of our types
-		assert.Equal(t, uint8(0), PacketType(nil))
+		if got := PacketType(nil); got != uint8(0) {
+			t.Errorf("got %v, want %v", got, uint8(0))
+		}
 	})
 }
 
@@ -418,21 +569,33 @@ func TestIsClientPacket(t *testing.T) {
 
 	for _, p := range clientPackets {
 		t.Run("client packet", func(t *testing.T) {
-			assert.True(t, IsClientPacket(p))
-			assert.False(t, IsServerPacket(p))
+			if !IsClientPacket(p) {
+				t.Errorf("expected true")
+			}
+			if IsServerPacket(p) {
+				t.Errorf("expected false")
+			}
 		})
 	}
 
 	for _, p := range serverPackets {
 		t.Run("server packet", func(t *testing.T) {
-			assert.False(t, IsClientPacket(p))
-			assert.True(t, IsServerPacket(p))
+			if IsClientPacket(p) {
+				t.Errorf("expected false")
+			}
+			if !IsServerPacket(p) {
+				t.Errorf("expected true")
+			}
 		})
 	}
 
 	t.Run("nil returns false", func(t *testing.T) {
-		assert.False(t, IsClientPacket(nil))
-		assert.False(t, IsServerPacket(nil))
+		if IsClientPacket(nil) {
+			t.Errorf("expected false")
+		}
+		if IsServerPacket(nil) {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -713,21 +876,32 @@ func FuzzParsePacket(f *testing.F) {
 func TestArgsFromMap(t *testing.T) {
 	t.Run("single pair", func(t *testing.T) {
 		args := ArgsFromMap(map[string]string{"priv-lvl": "15"})
-		require.Len(t, args, 1)
-		assert.Equal(t, []byte("priv-lvl=15"), args[0])
+		if len(args) != 1 {
+			t.Fatalf("len = %d, want %d", len(args), 1)
+		}
+		if !bytes.Equal(args[0], []byte("priv-lvl=15")) {
+			t.Errorf("got %v, want %v", args[0], []byte("priv-lvl=15"))
+		}
 	})
 
 	t.Run("multiple pairs", func(t *testing.T) {
 		args := ArgsFromMap(map[string]string{"priv-lvl": "15", "role": "admin"})
-		assert.Equal(t, [][]byte{[]byte("priv-lvl=15"), []byte("role=admin")}, args)
+		want := [][]byte{[]byte("priv-lvl=15"), []byte("role=admin")}
+		if !reflect.DeepEqual(args, want) {
+			t.Errorf("got %v, want %v", args, want)
+		}
 	})
 
 	t.Run("nil map", func(t *testing.T) {
-		assert.Nil(t, ArgsFromMap(nil))
+		if got := ArgsFromMap(nil); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
 	})
 
 	t.Run("empty map", func(t *testing.T) {
-		assert.Nil(t, ArgsFromMap(map[string]string{}))
+		if got := ArgsFromMap(map[string]string{}); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
 	})
 }
 
@@ -738,66 +912,114 @@ func TestArgValues(t *testing.T) {
 		v.Add("allow-commands1", "qwerty")
 		v.Del("test")
 
-		assert.Equal(t, []string{
+		wantStrings := []string{
 			"allow-commands1=qwerty",
 			"local-user-name=remote-readonly",
 			"priv-lvl=15",
-		}, v.Strings())
-		assert.Equal(t, [][]byte{
+		}
+		if got := v.Strings(); !reflect.DeepEqual(got, wantStrings) {
+			t.Errorf("got %v, want %v", got, wantStrings)
+		}
+		wantOutput := [][]byte{
 			[]byte("allow-commands1=qwerty"),
 			[]byte("local-user-name=remote-readonly"),
 			[]byte("priv-lvl=15"),
-		}, v.Output())
+		}
+		if got := v.Output(); !reflect.DeepEqual(got, wantOutput) {
+			t.Errorf("got %v, want %v", got, wantOutput)
+		}
 	})
 
 	t.Run("get set add del has", func(t *testing.T) {
 		v := ArgValues{}
 
-		assert.False(t, v.Has("role"))
-		assert.Empty(t, v.Get("role"))
+		if v.Has("role") {
+			t.Errorf("expected false")
+		}
+		if len(v.Get("role")) != 0 {
+			t.Errorf("expected empty, got %v", v.Get("role"))
+		}
 
 		v.Set("role", "readonly")
-		assert.True(t, v.Has("role"))
-		assert.Equal(t, "readonly", v.Get("role"))
+		if !v.Has("role") {
+			t.Errorf("expected true")
+		}
+		if got := v.Get("role"); got != "readonly" {
+			t.Errorf("got %v, want %v", got, "readonly")
+		}
 
 		v.Add("role", "operator")
-		assert.Equal(t, []string{"readonly", "operator"}, v["role"])
-		assert.Equal(t, "readonly", v.Get("role"))
+		if got := v["role"]; !reflect.DeepEqual(got, []string{"readonly", "operator"}) {
+			t.Errorf("got %v, want %v", got, []string{"readonly", "operator"})
+		}
+		if got := v.Get("role"); got != "readonly" {
+			t.Errorf("got %v, want %v", got, "readonly")
+		}
 
 		v.Del("role")
-		assert.False(t, v.Has("role"))
-		assert.Empty(t, v.Get("role"))
+		if v.Has("role") {
+			t.Errorf("expected false")
+		}
+		if len(v.Get("role")) != 0 {
+			t.Errorf("expected empty, got %v", v.Get("role"))
+		}
 	})
 
 	t.Run("multiple values preserve value order", func(t *testing.T) {
 		v := ArgValues{"cmd-arg": []string{"show", "running-config"}}
 
-		assert.Equal(t, []string{
+		wantStrings := []string{
 			"cmd-arg=show",
 			"cmd-arg=running-config",
-		}, v.Strings())
-		assert.Equal(t, [][]byte{
+		}
+		if got := v.Strings(); !reflect.DeepEqual(got, wantStrings) {
+			t.Errorf("got %v, want %v", got, wantStrings)
+		}
+		wantOutput := [][]byte{
 			[]byte("cmd-arg=show"),
 			[]byte("cmd-arg=running-config"),
-		}, v.Output())
+		}
+		if got := v.Output(); !reflect.DeepEqual(got, wantOutput) {
+			t.Errorf("got %v, want %v", got, wantOutput)
+		}
 	})
 
 	t.Run("empty value is emitted", func(t *testing.T) {
 		v := ArgValues{"optional": []string{""}}
 
-		assert.Equal(t, []string{"optional="}, v.Strings())
-		assert.Equal(t, [][]byte{[]byte("optional=")}, v.Output())
+		if got := v.Strings(); !reflect.DeepEqual(got, []string{"optional="}) {
+			t.Errorf("got %v, want %v", got, []string{"optional="})
+		}
+		if got := v.Output(); !reflect.DeepEqual(got, [][]byte{[]byte("optional=")}) {
+			t.Errorf("got %v, want %v", got, [][]byte{[]byte("optional=")})
+		}
 	})
 
 	t.Run("empty and nil values are omitted", func(t *testing.T) {
-		assert.Nil(t, ArgValues(nil).Strings())
-		assert.Nil(t, ArgValues{}.Strings())
-		assert.Nil(t, ArgValues{"empty": nil}.Strings())
-		assert.Nil(t, ArgValues{"empty": []string{}}.Strings())
-		assert.Nil(t, ArgValues(nil).Output())
-		assert.Nil(t, ArgValues{}.Output())
-		assert.Nil(t, ArgValues{"empty": nil}.Output())
-		assert.Nil(t, ArgValues{"empty": []string{}}.Output())
+		if got := ArgValues(nil).Strings(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{}).Strings(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{"empty": nil}).Strings(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{"empty": []string{}}).Strings(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValues(nil).Output(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{}).Output(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{"empty": nil}).Output(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := (ArgValues{"empty": []string{}}).Output(); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
 	})
 }
 
@@ -812,11 +1034,21 @@ func TestArgValuesParsing(t *testing.T) {
 			"ignored",
 		})
 
-		assert.Equal(t, "shell", values.Get("service"))
-		assert.Equal(t, []string{"show=version"}, values["cmd"])
-		assert.Equal(t, []string{"running-config", "all"}, values["cmd-arg"])
-		assert.Equal(t, []string{""}, values["optional"])
-		assert.False(t, values.Has("ignored"))
+		if got := values.Get("service"); got != "shell" {
+			t.Errorf("got %v, want %v", got, "shell")
+		}
+		if got := values["cmd"]; !reflect.DeepEqual(got, []string{"show=version"}) {
+			t.Errorf("got %v, want %v", got, []string{"show=version"})
+		}
+		if got := values["cmd-arg"]; !reflect.DeepEqual(got, []string{"running-config", "all"}) {
+			t.Errorf("got %v, want %v", got, []string{"running-config", "all"})
+		}
+		if got := values["optional"]; !reflect.DeepEqual(got, []string{""}) {
+			t.Errorf("got %v, want %v", got, []string{""})
+		}
+		if values.Has("ignored") {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("from raw args", func(t *testing.T) {
@@ -827,18 +1059,36 @@ func TestArgValuesParsing(t *testing.T) {
 			[]byte("role=operator"),
 		})
 
-		assert.Equal(t, "15", values.Get("priv-lvl"))
-		assert.Equal(t, []string{"readonly", "operator"}, values["role"])
-		assert.False(t, values.Has(""))
+		if got := values.Get("priv-lvl"); got != "15" {
+			t.Errorf("got %v, want %v", got, "15")
+		}
+		if got := values["role"]; !reflect.DeepEqual(got, []string{"readonly", "operator"}) {
+			t.Errorf("got %v, want %v", got, []string{"readonly", "operator"})
+		}
+		if values.Has("") {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("nil empty and malformed", func(t *testing.T) {
-		assert.Nil(t, ArgValuesFromArgs(nil))
-		assert.Nil(t, ArgValuesFromArgs([]string{}))
-		assert.Nil(t, ArgValuesFromArgs([]string{"malformed"}))
-		assert.Nil(t, ArgValuesFromRawArgs(nil))
-		assert.Nil(t, ArgValuesFromRawArgs([][]byte{}))
-		assert.Nil(t, ArgValuesFromRawArgs([][]byte{[]byte("malformed")}))
+		if got := ArgValuesFromArgs(nil); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValuesFromArgs([]string{}); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValuesFromArgs([]string{"malformed"}); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValuesFromRawArgs(nil); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValuesFromRawArgs([][]byte{}); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+		if got := ArgValuesFromRawArgs([][]byte{[]byte("malformed")}); got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
 	})
 }
 
@@ -852,8 +1102,12 @@ func TestPacketArgValues(t *testing.T) {
 		}
 
 		values := req.ArgValues()
-		assert.Equal(t, "shell", values.Get("service"))
-		assert.Equal(t, "show", values.Get("cmd"))
+		if got := values.Get("service"); got != "shell" {
+			t.Errorf("got %v, want %v", got, "shell")
+		}
+		if got := values.Get("cmd"); got != "show" {
+			t.Errorf("got %v, want %v", got, "show")
+		}
 	})
 
 	t.Run("authorization response", func(t *testing.T) {
@@ -866,8 +1120,12 @@ func TestPacketArgValues(t *testing.T) {
 		}
 
 		values := resp.ArgValues()
-		assert.Equal(t, "15", values.Get("priv-lvl"))
-		assert.Equal(t, []string{"readonly", "operator"}, values["role"])
+		if got := values.Get("priv-lvl"); got != "15" {
+			t.Errorf("got %v, want %v", got, "15")
+		}
+		if got := values["role"]; !reflect.DeepEqual(got, []string{"readonly", "operator"}) {
+			t.Errorf("got %v, want %v", got, []string{"readonly", "operator"})
+		}
 	})
 
 	t.Run("accounting request", func(t *testing.T) {
@@ -879,7 +1137,11 @@ func TestPacketArgValues(t *testing.T) {
 		}
 
 		values := req.ArgValues()
-		assert.Equal(t, "123", values.Get("task_id"))
-		assert.Equal(t, "shell", values.Get("service"))
+		if got := values.Get("task_id"); got != "123" {
+			t.Errorf("got %v, want %v", got, "123")
+		}
+		if got := values.Get("service"); got != "shell" {
+			t.Errorf("got %v, want %v", got, "shell")
+		}
 	})
 }

@@ -19,7 +19,7 @@ Provides both client and server SDK interfaces for Authentication, Authorization
 
 ## Requirements
 
-- Go 1.25 or later
+- Go 1.27 or later
 
 ## Installation
 

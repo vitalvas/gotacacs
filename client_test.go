@@ -1,16 +1,19 @@
 package gotacacs
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
+
+var errTest = errors.New("test error")
 
 // mockResponseConfig configures how the mock handler should respond
 type mockResponseConfig struct {
@@ -55,58 +58,89 @@ func createMockHandler(secret []byte, cfg mockResponseConfig) func(net.Conn) {
 func TestNewClient(t *testing.T) {
 	t.Run("create with defaults", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
-		assert.NotNil(t, client)
-		assert.Equal(t, "localhost:49", client.Address())
-		assert.Equal(t, 30*time.Second, client.timeout)
-		assert.False(t, client.singleConnect)
+		if client == nil {
+			t.Errorf("expected non-nil")
+		}
+		if client.Address() != "localhost:49" {
+			t.Errorf("got %v, want %v", client.Address(), "localhost:49")
+		}
+		if client.timeout != 30*time.Second {
+			t.Errorf("got %v, want %v", client.timeout, 30*time.Second)
+		}
+		if client.singleConnect {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("create with options", func(t *testing.T) {
-		client := NewClient(WithAddress("localhost:49"),
+		client := NewClient(
+			WithAddress("localhost:49"),
 			WithTimeout(10*time.Second),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
 		)
-		assert.Equal(t, 10*time.Second, client.timeout)
-		assert.Equal(t, []byte("testsecret"), client.secret)
-		assert.True(t, client.singleConnect)
+		if client.timeout != 10*time.Second {
+			t.Errorf("got %v, want %v", client.timeout, 10*time.Second)
+		}
+		if !bytes.Equal(client.secret, []byte("testsecret")) {
+			t.Errorf("got %v, want %v", client.secret, []byte("testsecret"))
+		}
+		if !client.singleConnect {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("create with TLS", func(t *testing.T) {
 		tlsConfig := &tls.Config{InsecureSkipVerify: true}
 		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
-		assert.NotNil(t, client.dialer)
+		if client.dialer == nil {
+			t.Errorf("expected non-nil")
+		}
 		_, ok := client.dialer.(*TLSDialer)
-		assert.True(t, ok)
-		assert.True(t, client.IsTLSMode(), "WithTLSConfig should enable RFC 9887 mode")
+		if !ok {
+			t.Errorf("expected true")
+		}
+		if !client.IsTLSMode() {
+			t.Errorf("WithTLSConfig should enable RFC 9887 mode")
+		}
 	})
 
 	t.Run("create with custom dialer", func(t *testing.T) {
 		dialer := &TCPDialer{Timeout: 5 * time.Second}
 		client := NewClient(WithAddress("localhost:49"), WithDialer(dialer))
-		assert.Equal(t, dialer, client.dialer)
+		if client.dialer != dialer {
+			t.Errorf("got %v, want %v", client.dialer, dialer)
+		}
 	})
 
 	t.Run("with secret bytes", func(t *testing.T) {
 		secret := []byte{0x01, 0x02, 0x03}
 		client := NewClient(WithAddress("localhost:49"), WithSecretBytes(secret))
-		assert.Equal(t, secret, client.secret)
+		if !bytes.Equal(client.secret, secret) {
+			t.Errorf("got %v, want %v", client.secret, secret)
+		}
 	})
 
 	t.Run("with max body length", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"), WithMaxBodyLength(1024))
-		assert.Equal(t, uint32(1024), client.maxBodyLength)
+		if client.maxBodyLength != uint32(1024) {
+			t.Errorf("got %v, want %v", client.maxBodyLength, uint32(1024))
+		}
 	})
 
 	t.Run("WithTLSConfig with nil config does not panic", func(t *testing.T) {
-		assert.NotPanics(t, func() {
-			client := NewClient(WithAddress("localhost:300"), WithTLSConfig(nil))
-			assert.True(t, client.IsTLSMode())
-			if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
-				assert.NotNil(t, tlsDialer.Config)
-				assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion)
+		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(nil))
+		if !client.IsTLSMode() {
+			t.Errorf("expected true")
+		}
+		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
+			if tlsDialer.Config == nil {
+				t.Errorf("expected non-nil")
 			}
-		})
+			if tlsDialer.Config.MinVersion != uint16(tls.VersionTLS13) {
+				t.Errorf("got %v, want %v", tlsDialer.Config.MinVersion, uint16(tls.VersionTLS13))
+			}
+		}
 	})
 
 	t.Run("WithTLSConfig normalizes MaxVersion below TLS 1.3", func(t *testing.T) {
@@ -117,10 +151,12 @@ func TestNewClient(t *testing.T) {
 		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
 
 		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
-			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MinVersion,
-				"MinVersion should be TLS 1.3")
-			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MaxVersion,
-				"MaxVersion should be normalized to TLS 1.3")
+			if tlsDialer.Config.MinVersion != uint16(tls.VersionTLS13) {
+				t.Errorf("MinVersion should be TLS 1.3: got %v, want %v", tlsDialer.Config.MinVersion, uint16(tls.VersionTLS13))
+			}
+			if tlsDialer.Config.MaxVersion != uint16(tls.VersionTLS13) {
+				t.Errorf("MaxVersion should be normalized to TLS 1.3: got %v, want %v", tlsDialer.Config.MaxVersion, uint16(tls.VersionTLS13))
+			}
 		}
 	})
 
@@ -132,7 +168,9 @@ func TestNewClient(t *testing.T) {
 		client := NewClient(WithAddress("localhost:300"), WithTLSConfig(tlsConfig))
 
 		if tlsDialer, ok := client.dialer.(*TLSDialer); ok {
-			assert.Equal(t, uint16(tls.VersionTLS13), tlsDialer.Config.MaxVersion)
+			if tlsDialer.Config.MaxVersion != uint16(tls.VersionTLS13) {
+				t.Errorf("got %v, want %v", tlsDialer.Config.MaxVersion, uint16(tls.VersionTLS13))
+			}
 		}
 	})
 }
@@ -141,7 +179,9 @@ func TestClientConnect(t *testing.T) {
 	t.Run("connect to server", func(t *testing.T) {
 		// Start test server
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -154,41 +194,61 @@ func TestClientConnect(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(5*time.Second))
 		err = client.Connect(context.Background())
-		require.NoError(t, err)
-		assert.True(t, client.IsConnected())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !client.IsConnected() {
+			t.Errorf("expected true")
+		}
 
 		// Second connect should be no-op
 		err = client.Connect(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		client.Close()
-		assert.False(t, client.IsConnected())
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("connect failure", func(t *testing.T) {
 		client := NewClient(WithAddress("127.0.0.1:1"), WithTimeout(100*time.Millisecond))
 		err := client.Connect(context.Background())
-		assert.Error(t, err)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("close when not connected", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
 		err := client.Close()
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 }
 
 func TestClientAddresses(t *testing.T) {
 	t.Run("local and remote addr when not connected", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
-		assert.Nil(t, client.LocalAddr())
-		assert.Nil(t, client.RemoteAddr())
+		if client.LocalAddr() != nil {
+			t.Errorf("expected nil, got %v", client.LocalAddr())
+		}
+		if client.RemoteAddr() != nil {
+			t.Errorf("expected nil, got %v", client.RemoteAddr())
+		}
 	})
 
 	t.Run("local and remote addr when connected", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -201,11 +261,17 @@ func TestClientAddresses(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()))
 		err = client.Connect(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer client.Close()
 
-		assert.NotNil(t, client.LocalAddr())
-		assert.NotNil(t, client.RemoteAddr())
+		if client.LocalAddr() == nil {
+			t.Errorf("expected non-nil")
+		}
+		if client.RemoteAddr() == nil {
+			t.Errorf("expected non-nil")
+		}
 	})
 }
 
@@ -217,7 +283,9 @@ type mockServer struct {
 
 func newMockServer(t *testing.T, handler func(conn net.Conn)) *mockServer {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	s := &mockServer{
 		ln:      ln,
@@ -296,8 +364,12 @@ func TestClientAuthenticate(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsPass() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("PAP authentication failure", func(t *testing.T) {
@@ -341,8 +413,12 @@ func TestClientAuthenticate(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "wrongpass")
-		require.NoError(t, err)
-		assert.True(t, reply.IsFail())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsFail() {
+			t.Errorf("expected true")
+		}
 	})
 }
 
@@ -388,9 +464,15 @@ func TestClientAuthorize(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell", "cmd=show"})
-		require.NoError(t, err)
-		assert.True(t, resp.IsPass())
-		assert.Equal(t, []string{"priv-lvl=15"}, resp.Args())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !resp.IsPass() {
+			t.Errorf("expected true")
+		}
+		if !reflect.DeepEqual(resp.Args(), []string{"priv-lvl=15"}) {
+			t.Errorf("got %v, want %v", resp.Args(), []string{"priv-lvl=15"})
+		}
 	})
 }
 
@@ -434,8 +516,12 @@ func TestClientAccounting(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
-		require.NoError(t, err)
-		assert.True(t, reply.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsSuccess() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("accounting stop", func(t *testing.T) {
@@ -445,8 +531,12 @@ func TestClientAccounting(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStop, "testuser", []string{"elapsed_time=60"})
-		require.NoError(t, err)
-		assert.True(t, reply.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsSuccess() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("accounting watchdog", func(t *testing.T) {
@@ -456,8 +546,12 @@ func TestClientAccounting(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagWatchdog, "testuser", []string{"bytes_in=1024"})
-		require.NoError(t, err)
-		assert.True(t, reply.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsSuccess() {
+			t.Errorf("expected true")
+		}
 	})
 }
 
@@ -473,7 +567,9 @@ func TestClientConnectionErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithTimeout(time.Second))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("invalid response type", func(t *testing.T) {
@@ -507,7 +603,9 @@ func TestClientConnectionErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
@@ -552,7 +650,8 @@ func TestClientSingleConnect(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		client := NewClient(WithAddress(server.Addr()),
+		client := NewClient(
+			WithAddress(server.Addr()),
 			WithSecret("testsecret"),
 			WithSingleConnect(true),
 		)
@@ -561,8 +660,12 @@ func TestClientSingleConnect(t *testing.T) {
 		// Multiple authentications should reuse connection
 		for range 3 {
 			reply, err := client.Authenticate(context.Background(), "user", "pass")
-			require.NoError(t, err)
-			assert.True(t, reply.IsPass())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reply.IsPass() {
+				t.Errorf("expected true")
+			}
 		}
 	})
 }
@@ -611,11 +714,21 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenFollow)
-		assert.Contains(t, err.Error(), followServer)
-		assert.NotNil(t, reply)
-		assert.Equal(t, uint8(AuthenStatusFollow), reply.Status)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenFollow) {
+			t.Errorf("error %v is not %v", err, ErrAuthenFollow)
+		}
+		if !strings.Contains(err.Error(), followServer) {
+			t.Errorf("error %q does not contain %q", err.Error(), followServer)
+		}
+		if reply == nil {
+			t.Errorf("expected non-nil")
+		}
+		if reply.Status != uint8(AuthenStatusFollow) {
+			t.Errorf("got %v, want %v", reply.Status, uint8(AuthenStatusFollow))
+		}
 	})
 
 	t.Run("authentication restart returns typed error", func(t *testing.T) {
@@ -660,10 +773,18 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenRestart)
-		assert.NotNil(t, reply)
-		assert.Equal(t, uint8(AuthenStatusRestart), reply.Status)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenRestart) {
+			t.Errorf("error %v is not %v", err, ErrAuthenRestart)
+		}
+		if reply == nil {
+			t.Errorf("expected non-nil")
+		}
+		if reply.Status != uint8(AuthenStatusRestart) {
+			t.Errorf("got %v, want %v", reply.Status, uint8(AuthenStatusRestart))
+		}
 	})
 
 	t.Run("ASCII authentication follow returns typed error", func(t *testing.T) {
@@ -711,10 +832,18 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 			return "password", nil
 		})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenFollow)
-		assert.Contains(t, err.Error(), followServer)
-		assert.NotNil(t, reply)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenFollow) {
+			t.Errorf("error %v is not %v", err, ErrAuthenFollow)
+		}
+		if !strings.Contains(err.Error(), followServer) {
+			t.Errorf("error %q does not contain %q", err.Error(), followServer)
+		}
+		if reply == nil {
+			t.Errorf("expected non-nil")
+		}
 	})
 
 	t.Run("ASCII authentication restart returns typed error", func(t *testing.T) {
@@ -761,31 +890,44 @@ func TestClientAuthenFollowRestart(t *testing.T) {
 			return "password", nil
 		})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenRestart)
-		assert.NotNil(t, reply)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenRestart) {
+			t.Errorf("error %v is not %v", err, ErrAuthenRestart)
+		}
+		if reply == nil {
+			t.Errorf("expected non-nil")
+		}
 	})
 }
 
+//nolint:gocyclo // exhaustive error-path coverage across many subtests; complexity is inherent
 func TestClientErrorPaths(t *testing.T) {
 	t.Run("authenticate ascii connection refused", func(t *testing.T) {
 		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
 		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("authorize connection refused", func(t *testing.T) {
 		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("accounting connection refused", func(t *testing.T) {
 		client := NewClient(WithAddress("127.0.0.1:0"), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("authenticate ascii promptHandler error", func(t *testing.T) {
@@ -834,11 +976,15 @@ func TestClientErrorPaths(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.AuthenticateASCII(context.Background(), "testuser", func(_ string, _ bool) (string, error) {
-			return "", assert.AnError
+			return "", errTest
 		})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, assert.AnError)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, errTest) {
+			t.Errorf("error %v is not %v", err, errTest)
+		}
 	})
 
 	t.Run("authenticate ascii unexpected status", func(t *testing.T) {
@@ -885,8 +1031,12 @@ func TestClientErrorPaths(t *testing.T) {
 			return "password", nil
 		})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unexpected authentication status")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "unexpected authentication status") {
+			t.Errorf("error %q does not contain %q", err.Error(), "unexpected authentication status")
+		}
 	})
 
 	t.Run("authenticate ascii recvPacket error", func(t *testing.T) {
@@ -914,7 +1064,9 @@ func TestClientErrorPaths(t *testing.T) {
 			return "password", nil
 		})
 
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 
 	t.Run("authorize recvPacket error", func(t *testing.T) {
@@ -938,7 +1090,9 @@ func TestClientErrorPaths(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("accounting recvPacket error", func(t *testing.T) {
@@ -962,7 +1116,9 @@ func TestClientErrorPaths(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("authorize wrong packet type", func(t *testing.T) {
@@ -982,8 +1138,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidType)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidType) {
+			t.Errorf("error %v is not %v", err, ErrInvalidType)
+		}
 	})
 
 	t.Run("accounting wrong packet type", func(t *testing.T) {
@@ -1003,8 +1163,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidType)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidType) {
+			t.Errorf("error %v is not %v", err, ErrInvalidType)
+		}
 	})
 
 	t.Run("authorize session id mismatch", func(t *testing.T) {
@@ -1025,8 +1189,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSessionNotFound)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("error %v is not %v", err, ErrSessionNotFound)
+		}
 	})
 
 	t.Run("authorize sequence number mismatch", func(t *testing.T) {
@@ -1046,8 +1214,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidSequence)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("recvPacket body too large", func(t *testing.T) {
@@ -1083,8 +1255,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrBodyTooLarge)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBodyTooLarge) {
+			t.Errorf("error %v is not %v", err, ErrBodyTooLarge)
+		}
 	})
 
 	t.Run("recvPacket invalid header version", func(t *testing.T) {
@@ -1119,8 +1295,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidVersion)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidVersion) {
+			t.Errorf("error %v is not %v", err, ErrInvalidVersion)
+		}
 	})
 
 	t.Run("accounting session id mismatch", func(t *testing.T) {
@@ -1141,8 +1321,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSessionNotFound)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("error %v is not %v", err, ErrSessionNotFound)
+		}
 	})
 
 	t.Run("accounting sequence number mismatch", func(t *testing.T) {
@@ -1162,8 +1346,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidSequence)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("authorize unknown status", func(t *testing.T) {
@@ -1183,11 +1371,21 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.NotNil(t, result)
-		assert.Equal(t, uint8(0xFF), result.Status)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
+		if result.Status != uint8(0xFF) {
+			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("accounting unknown status", func(t *testing.T) {
@@ -1207,11 +1405,21 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.NotNil(t, result)
-		assert.Equal(t, uint8(0xFF), result.Status)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
+		if result.Status != uint8(0xFF) {
+			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("RFC 9887 tlsMode on non-TLS connection uses obfuscation", func(t *testing.T) {
@@ -1270,9 +1478,12 @@ func TestClientErrorPaths(t *testing.T) {
 		client.tlsMode = true // This should be ignored for non-TLS connections
 
 		reply, err := client.Authenticate(context.Background(), "user", "pass")
-
-		require.NoError(t, err)
-		assert.True(t, reply.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsPass() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("non-TLS response cannot bypass obfuscation with unencrypted flag", func(t *testing.T) {
@@ -1293,9 +1504,15 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.Contains(t, err.Error(), "unencrypted flag")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if !strings.Contains(err.Error(), "unencrypted flag") {
+			t.Errorf("error %q does not contain %q", err.Error(), "unencrypted flag")
+		}
 	})
 }
 
@@ -1307,7 +1524,9 @@ func TestWithSecretBytesCopy(t *testing.T) {
 		// Mutate the original slice
 		secret[0] = 'X'
 
-		assert.Equal(t, []byte("original"), client.secret)
+		if !bytes.Equal(client.secret, []byte("original")) {
+			t.Errorf("got %v, want %v", client.secret, []byte("original"))
+		}
 	})
 }
 
@@ -1375,15 +1594,21 @@ func TestASCIIAuthMaxPrompts(t *testing.T) {
 			return "response", nil
 		})
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrMaxPrompts)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrMaxPrompts) {
+			t.Errorf("error %v is not %v", err, ErrMaxPrompts)
+		}
 	})
 }
 
 func TestClientIsTLSConnection(t *testing.T) {
 	t.Run("nil connection returns false", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
-		assert.False(t, client.IsTLSConnection())
+		if client.IsTLSConnection() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -1398,7 +1623,9 @@ func TestClientSendPacketErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
 		err := client.Connect(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Close the client's own connection to force write errors
 		client.mu.Lock()
@@ -1408,7 +1635,9 @@ func TestClientSendPacketErrors(t *testing.T) {
 		client.mu.Unlock()
 
 		_, err = client.Authenticate(context.Background(), "user", "pass")
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 }
 
@@ -1434,8 +1663,12 @@ func TestClientRecvPacketErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to read header")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to read header") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to read header")
+		}
 	})
 
 	t.Run("body read error", func(t *testing.T) {
@@ -1470,17 +1703,26 @@ func TestClientRecvPacketErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret(string(secret)), WithTimeout(time.Second))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to read body")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to read body") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to read body")
+		}
 	})
 }
 
+//nolint:gocyclo // exhaustive error-path coverage across many subtests; complexity is inherent
 func TestAuthenticateWithContextErrors(t *testing.T) {
 	t.Run("nil authCtx", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
 		_, err := client.AuthenticateWithContext(context.Background(), nil)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 
 	t.Run("session id mismatch", func(t *testing.T) {
@@ -1503,8 +1745,12 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSessionNotFound)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("error %v is not %v", err, ErrSessionNotFound)
+		}
 	})
 
 	t.Run("sequence number mismatch", func(t *testing.T) {
@@ -1526,8 +1772,12 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidSequence)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("response type mismatch", func(t *testing.T) {
@@ -1549,8 +1799,12 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidType)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidType) {
+			t.Errorf("error %v is not %v", err, ErrInvalidType)
+		}
 	})
 
 	t.Run("unmarshal reply error with truncated body", func(t *testing.T) {
@@ -1589,8 +1843,12 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to unmarshal REPLY") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to unmarshal REPLY")
+		}
 	})
 
 	t.Run("authen status error", func(t *testing.T) {
@@ -1612,8 +1870,12 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.NoError(t, err)
-		assert.True(t, result.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("interactive status in non-interactive authenticate is invalid", func(t *testing.T) {
@@ -1635,11 +1897,21 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.NotNil(t, result)
-		assert.Equal(t, uint8(AuthenStatusGetPass), result.Status)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
+		if result.Status != uint8(AuthenStatusGetPass) {
+			t.Errorf("got %v, want %v", result.Status, uint8(AuthenStatusGetPass))
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("unknown status in non-interactive authenticate is invalid", func(t *testing.T) {
@@ -1661,11 +1933,21 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.NotNil(t, result)
-		assert.Equal(t, uint8(0xFF), result.Status)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
+		if result.Status != uint8(0xFF) {
+			t.Errorf("got %v, want %v", result.Status, uint8(0xFF))
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("server rejects single connect for follow", func(t *testing.T) {
@@ -1687,11 +1969,19 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenFollow)
-		assert.NotNil(t, result)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenFollow) {
+			t.Errorf("error %v is not %v", err, ErrAuthenFollow)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
 		// Connection should be closed since server did not echo single-connect flag
-		assert.False(t, client.IsConnected())
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("server rejects single connect for restart", func(t *testing.T) {
@@ -1713,10 +2003,18 @@ func TestAuthenticateWithContextErrors(t *testing.T) {
 			Username: "user",
 			Password: "pass",
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAuthenRestart)
-		assert.NotNil(t, result)
-		assert.False(t, client.IsConnected())
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrAuthenRestart) {
+			t.Errorf("error %v is not %v", err, ErrAuthenRestart)
+		}
+		if result == nil {
+			t.Errorf("expected non-nil")
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -1740,8 +2038,12 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrSessionNotFound)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrSessionNotFound) {
+			t.Errorf("error %v is not %v", err, ErrSessionNotFound)
+		}
 	})
 
 	t.Run("sequence number mismatch in ASCII loop", func(t *testing.T) {
@@ -1762,8 +2064,12 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidSequence)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidSequence) {
+			t.Errorf("error %v is not %v", err, ErrInvalidSequence)
+		}
 	})
 
 	t.Run("unmarshal error in ASCII loop", func(t *testing.T) {
@@ -1801,8 +2107,12 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to unmarshal REPLY") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to unmarshal REPLY")
+		}
 	})
 
 	t.Run("response type mismatch in ASCII loop", func(t *testing.T) {
@@ -1823,8 +2133,12 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		_, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidType)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidType) {
+			t.Errorf("error %v is not %v", err, ErrInvalidType)
+		}
 	})
 
 	t.Run("ASCII pass with single connect rejected", func(t *testing.T) {
@@ -1845,9 +2159,15 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, result.IsPass())
-		assert.False(t, client.IsConnected())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsPass() {
+			t.Errorf("expected true")
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("ASCII fail with single connect rejected", func(t *testing.T) {
@@ -1868,9 +2188,15 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, result.IsFail())
-		assert.False(t, client.IsConnected())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsFail() {
+			t.Errorf("expected true")
+		}
+		if client.IsConnected() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("ASCII error status", func(t *testing.T) {
@@ -1891,8 +2217,12 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		require.NoError(t, err)
-		assert.True(t, result.IsError())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !result.IsError() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("send continue error on closed connection", func(t *testing.T) {
@@ -1940,7 +2270,9 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			return "mypassword", nil
 		})
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 }
 
@@ -1978,8 +2310,12 @@ func TestAuthorizeErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to unmarshal RESPONSE")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to unmarshal RESPONSE") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to unmarshal RESPONSE")
+		}
 	})
 
 	t.Run("authorize send error", func(t *testing.T) {
@@ -1992,13 +2328,17 @@ func TestAuthorizeErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
 		err := client.Connect(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Wait for server to close
 		time.Sleep(50 * time.Millisecond)
 
 		_, err = client.Authorize(context.Background(), "user", []string{"service=shell"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("authorize fail status sets error state", func(t *testing.T) {
@@ -2017,8 +2357,12 @@ func TestAuthorizeErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
-		require.NoError(t, err)
-		assert.False(t, result.IsPass())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsPass() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -2056,8 +2400,12 @@ func TestAccountingErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to unmarshal REPLY")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to unmarshal REPLY") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to unmarshal REPLY")
+		}
 	})
 
 	t.Run("accounting send error", func(t *testing.T) {
@@ -2070,13 +2418,17 @@ func TestAccountingErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(time.Second))
 		err := client.Connect(context.Background())
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Wait for server to close
 		time.Sleep(50 * time.Millisecond)
 
 		_, err = client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		assert.Error(t, err)
+		if err == nil {
+			t.Errorf("expected an error")
+		}
 	})
 
 	t.Run("accounting error status sets error state", func(t *testing.T) {
@@ -2095,8 +2447,12 @@ func TestAccountingErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		require.NoError(t, err)
-		assert.False(t, result.IsSuccess())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.IsSuccess() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -2117,7 +2473,9 @@ func TestClientSendPacketWriteDeadlineError(t *testing.T) {
 		header.SeqNo = 1
 		err := client.sendPacket(context.Background(), header, []byte{0x01})
 
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 
 	t.Run("writeAll header error without timeout", func(t *testing.T) {
@@ -2135,8 +2493,12 @@ func TestClientSendPacketWriteDeadlineError(t *testing.T) {
 		header.SeqNo = 1
 		err := client.sendPacket(context.Background(), header, []byte{0x01})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to write header")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to write header") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to write header")
+		}
 		clientConn.Close()
 	})
 
@@ -2161,8 +2523,12 @@ func TestClientSendPacketWriteDeadlineError(t *testing.T) {
 		header.SeqNo = 1
 		err := client.sendPacket(context.Background(), header, []byte{0x01, 0x02, 0x03})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to write body")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to write body") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to write body")
+		}
 		clientConn.Close()
 	})
 }
@@ -2181,7 +2547,9 @@ func TestClientRecvPacketReadDeadlineError(t *testing.T) {
 		client.conn = clientConn
 
 		_, _, err := client.recvPacket(context.Background())
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 
 	t.Run("non-EOF header read error", func(t *testing.T) {
@@ -2201,8 +2569,12 @@ func TestClientRecvPacketReadDeadlineError(t *testing.T) {
 		}()
 
 		_, _, err := client.recvPacket(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to read header")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "failed to read header") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to read header")
+		}
 		clientConn.Close()
 	})
 
@@ -2233,8 +2605,12 @@ func TestClientRecvPacketReadDeadlineError(t *testing.T) {
 		}()
 
 		_, _, err := client.recvPacket(context.Background())
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid header")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "invalid header") {
+			t.Errorf("error %q does not contain %q", err.Error(), "invalid header")
+		}
 		clientConn.Close()
 	})
 }
@@ -2242,7 +2618,9 @@ func TestClientRecvPacketReadDeadlineError(t *testing.T) {
 func TestClientRecvPacketTLSUnencryptedFlagCheck(t *testing.T) {
 	t.Run("TLS connection rejects packet without unencrypted flag", func(t *testing.T) {
 		cert, err := generateTestCertificate()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -2250,7 +2628,9 @@ func TestClientRecvPacketTLSUnencryptedFlagCheck(t *testing.T) {
 		}
 
 		ln, err := tls.Listen("tcp", "127.0.0.1:0", serverConfig)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		defer ln.Close()
 
 		go func() {
@@ -2297,9 +2677,15 @@ func TestClientRecvPacketTLSUnencryptedFlagCheck(t *testing.T) {
 		)
 
 		_, err = client.Authenticate(context.Background(), "testuser", "password")
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.Contains(t, err.Error(), "RFC 9887")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if !strings.Contains(err.Error(), "RFC 9887") {
+			t.Errorf("error %q does not contain %q", err.Error(), "RFC 9887")
+		}
 	})
 }
 
@@ -2344,6 +2730,8 @@ func TestClientContextCancellation(t *testing.T) {
 		defer cancel()
 
 		_, err := client.Authenticate(ctx, "user", "pass")
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 }

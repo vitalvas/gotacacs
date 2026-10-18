@@ -1,53 +1,89 @@
 package gotacacs
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSessionState(t *testing.T) {
 	t.Run("string representation", func(t *testing.T) {
-		assert.Equal(t, "NEW", SessionStateNew.String())
-		assert.Equal(t, "ACTIVE", SessionStateActive.String())
-		assert.Equal(t, "COMPLETE", SessionStateComplete.String())
-		assert.Equal(t, "ERROR", SessionStateError.String())
-		assert.Equal(t, "UNKNOWN", SessionState(99).String())
+		if got := SessionStateNew.String(); got != "NEW" {
+			t.Errorf("got %v, want %v", got, "NEW")
+		}
+		if got := SessionStateActive.String(); got != "ACTIVE" {
+			t.Errorf("got %v, want %v", got, "ACTIVE")
+		}
+		if got := SessionStateComplete.String(); got != "COMPLETE" {
+			t.Errorf("got %v, want %v", got, "COMPLETE")
+		}
+		if got := SessionStateError.String(); got != "ERROR" {
+			t.Errorf("got %v, want %v", got, "ERROR")
+		}
+		if got := SessionState(99).String(); got != "UNKNOWN" {
+			t.Errorf("got %v, want %v", got, "UNKNOWN")
+		}
 	})
 }
 
 func TestNewSession(t *testing.T) {
 	t.Run("create client session", func(t *testing.T) {
 		session, err := NewSession(true)
-		require.NoError(t, err)
-		require.NotNil(t, session)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if session == nil {
+			t.Fatal("expected non-nil")
+		}
 
-		assert.NotZero(t, session.ID())
-		assert.Equal(t, SessionStateNew, session.State())
-		assert.Equal(t, uint8(0), session.SeqNo())
-		assert.True(t, session.IsClient())
-		assert.WithinDuration(t, time.Now(), session.Created(), time.Second)
-		assert.WithinDuration(t, time.Now(), session.LastActivity(), time.Second)
+		if session.ID() == 0 {
+			t.Errorf("expected non-zero")
+		}
+		if got := session.State(); got != SessionStateNew {
+			t.Errorf("got %v, want %v", got, SessionStateNew)
+		}
+		if got := session.SeqNo(); got != uint8(0) {
+			t.Errorf("got %v, want %v", got, uint8(0))
+		}
+		if !session.IsClient() {
+			t.Errorf("expected true")
+		}
+		now := time.Now()
+		if diff := now.Sub(session.Created()); diff < 0 || diff > time.Second {
+			t.Errorf("created %v not within %v of %v", session.Created(), time.Second, now)
+		}
+		now = time.Now()
+		if diff := now.Sub(session.LastActivity()); diff < 0 || diff > time.Second {
+			t.Errorf("lastActivity %v not within %v of %v", session.LastActivity(), time.Second, now)
+		}
 	})
 
 	t.Run("create server session", func(t *testing.T) {
 		session, err := NewSession(false)
-		require.NoError(t, err)
-		require.NotNil(t, session)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if session == nil {
+			t.Fatal("expected non-nil")
+		}
 
-		assert.False(t, session.IsClient())
+		if session.IsClient() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("unique session IDs", func(t *testing.T) {
 		ids := make(map[uint32]bool)
 		for range 100 {
 			session, err := NewSession(true)
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			id := session.ID()
-			assert.False(t, ids[id], "duplicate session ID generated")
+			if ids[id] {
+				t.Errorf("duplicate session ID generated")
+			}
 			ids[id] = true
 		}
 	})
@@ -56,14 +92,22 @@ func TestNewSession(t *testing.T) {
 func TestNewSessionWithID(t *testing.T) {
 	t.Run("create with specific ID", func(t *testing.T) {
 		session := NewSessionWithID(0x12345678, true)
-		assert.Equal(t, uint32(0x12345678), session.ID())
-		assert.True(t, session.IsClient())
+		if got := session.ID(); got != uint32(0x12345678) {
+			t.Errorf("got %v, want %v", got, uint32(0x12345678))
+		}
+		if !session.IsClient() {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("create server session with ID", func(t *testing.T) {
 		session := NewSessionWithID(0xDEADBEEF, false)
-		assert.Equal(t, uint32(0xDEADBEEF), session.ID())
-		assert.False(t, session.IsClient())
+		if got := session.ID(); got != uint32(0xDEADBEEF) {
+			t.Errorf("got %v, want %v", got, uint32(0xDEADBEEF))
+		}
+		if session.IsClient() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -73,22 +117,40 @@ func TestSessionSequenceNumbers(t *testing.T) {
 
 		// First call returns 1
 		seqNo, err := session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(1), seqNo)
-		assert.Equal(t, SessionStateActive, session.State())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(1) {
+			t.Errorf("got %v, want %v", seqNo, uint8(1))
+		}
+		if got := session.State(); got != SessionStateActive {
+			t.Errorf("got %v, want %v", got, SessionStateActive)
+		}
 
 		// Subsequent calls increment
 		seqNo, err = session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(2), seqNo)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(2) {
+			t.Errorf("got %v, want %v", seqNo, uint8(2))
+		}
 
 		seqNo, err = session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(3), seqNo)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(3) {
+			t.Errorf("got %v, want %v", seqNo, uint8(3))
+		}
 
 		seqNo, err = session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(4), seqNo)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(4) {
+			t.Errorf("got %v, want %v", seqNo, uint8(4))
+		}
 	})
 
 	t.Run("server sequence numbers", func(t *testing.T) {
@@ -96,18 +158,32 @@ func TestSessionSequenceNumbers(t *testing.T) {
 
 		// First call returns 2
 		seqNo, err := session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(2), seqNo)
-		assert.Equal(t, SessionStateActive, session.State())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(2) {
+			t.Errorf("got %v, want %v", seqNo, uint8(2))
+		}
+		if got := session.State(); got != SessionStateActive {
+			t.Errorf("got %v, want %v", got, SessionStateActive)
+		}
 
 		// Subsequent calls increment
 		seqNo, err = session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(3), seqNo)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(3) {
+			t.Errorf("got %v, want %v", seqNo, uint8(3))
+		}
 
 		seqNo, err = session.NextSeqNo()
-		require.NoError(t, err)
-		assert.Equal(t, uint8(4), seqNo)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if seqNo != uint8(4) {
+			t.Errorf("got %v, want %v", seqNo, uint8(4))
+		}
 	})
 
 	t.Run("sequence number overflow", func(t *testing.T) {
@@ -119,7 +195,9 @@ func TestSessionSequenceNumbers(t *testing.T) {
 
 		// Next call should return error
 		_, err := session.NextSeqNo()
-		assert.ErrorIs(t, err, ErrSequenceOverflow)
+		if !errors.Is(err, ErrSequenceOverflow) {
+			t.Errorf("error %v is not %v", err, ErrSequenceOverflow)
+		}
 	})
 }
 
@@ -129,22 +207,38 @@ func TestSessionValidateSeqNo(t *testing.T) {
 
 		// Client sent seq 1
 		_, err := session.NextSeqNo()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Server should respond with seq 2
-		assert.True(t, session.ValidateSeqNo(2))
-		assert.False(t, session.ValidateSeqNo(1))
-		assert.False(t, session.ValidateSeqNo(3))
-		assert.False(t, session.ValidateSeqNo(0))
+		if !session.ValidateSeqNo(2) {
+			t.Errorf("expected true")
+		}
+		if session.ValidateSeqNo(1) {
+			t.Errorf("expected false")
+		}
+		if session.ValidateSeqNo(3) {
+			t.Errorf("expected false")
+		}
+		if session.ValidateSeqNo(0) {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("server validates client requests", func(t *testing.T) {
 		session := NewSessionWithID(1, false)
 
 		// First client packet should be seq 1
-		assert.True(t, session.ValidateSeqNo(1))
-		assert.False(t, session.ValidateSeqNo(2))
-		assert.False(t, session.ValidateSeqNo(0))
+		if !session.ValidateSeqNo(1) {
+			t.Errorf("expected true")
+		}
+		if session.ValidateSeqNo(2) {
+			t.Errorf("expected false")
+		}
+		if session.ValidateSeqNo(0) {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("server validates subsequent client packets", func(t *testing.T) {
@@ -153,17 +247,27 @@ func TestSessionValidateSeqNo(t *testing.T) {
 
 		// Server sent seq 2
 		_, err := session.NextSeqNo()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Next client packet should be seq 3
-		assert.True(t, session.ValidateSeqNo(3))
-		assert.False(t, session.ValidateSeqNo(2))
-		assert.False(t, session.ValidateSeqNo(4))
+		if !session.ValidateSeqNo(3) {
+			t.Errorf("expected true")
+		}
+		if session.ValidateSeqNo(2) {
+			t.Errorf("expected false")
+		}
+		if session.ValidateSeqNo(4) {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("zero sequence is invalid", func(t *testing.T) {
 		session := NewSessionWithID(1, true)
-		assert.False(t, session.ValidateSeqNo(0))
+		if session.ValidateSeqNo(0) {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -175,14 +279,20 @@ func TestSessionSetState(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		session.SetState(SessionStateComplete)
 
-		assert.Equal(t, SessionStateComplete, session.State())
-		assert.True(t, session.LastActivity().After(initialActivity))
+		if got := session.State(); got != SessionStateComplete {
+			t.Errorf("got %v, want %v", got, SessionStateComplete)
+		}
+		if !session.LastActivity().After(initialActivity) {
+			t.Errorf("expected true")
+		}
 	})
 
 	t.Run("set error state", func(t *testing.T) {
 		session := NewSessionWithID(1, true)
 		session.SetState(SessionStateError)
-		assert.Equal(t, SessionStateError, session.State())
+		if got := session.State(); got != SessionStateError {
+			t.Errorf("got %v, want %v", got, SessionStateError)
+		}
 	})
 }
 
@@ -194,7 +304,9 @@ func TestSessionTouch(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		session.Touch()
 
-		assert.True(t, session.LastActivity().After(initialActivity))
+		if !session.LastActivity().After(initialActivity) {
+			t.Errorf("expected true")
+		}
 	})
 }
 
@@ -203,8 +315,12 @@ func TestSessionUpdateSeqNo(t *testing.T) {
 		session := NewSessionWithID(1, false)
 		session.UpdateSeqNo(1)
 
-		assert.Equal(t, uint8(1), session.SeqNo())
-		assert.Equal(t, SessionStateActive, session.State())
+		if got := session.SeqNo(); got != uint8(1) {
+			t.Errorf("got %v, want %v", got, uint8(1))
+		}
+		if got := session.State(); got != SessionStateActive {
+			t.Errorf("got %v, want %v", got, SessionStateActive)
+		}
 	})
 }
 
@@ -242,9 +358,13 @@ func TestTrackedSession(t *testing.T) {
 				State:      SessionStateActive,
 			},
 		}
-		assert.False(t, ts.kicked.Load())
+		if ts.kicked.Load() {
+			t.Errorf("expected false")
+		}
 		ts.kicked.Store(true)
-		assert.True(t, ts.kicked.Load())
+		if !ts.kicked.Load() {
+			t.Errorf("expected true")
+		}
 	})
 }
 
@@ -252,7 +372,9 @@ func TestGenerateSessionID(t *testing.T) {
 	t.Run("generates non-zero IDs", func(t *testing.T) {
 		for range 100 {
 			id, err := generateSessionID()
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			// Very unlikely to get zero with random generation
 			// but technically possible, so we just check no error
 			_ = id
@@ -263,11 +385,15 @@ func TestGenerateSessionID(t *testing.T) {
 		ids := make(map[uint32]bool)
 		for range 100 {
 			id, err := generateSessionID()
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			ids[id] = true
 		}
 		// Should have mostly unique IDs (collisions extremely unlikely)
-		assert.True(t, len(ids) >= 99)
+		if len(ids) < 99 {
+			t.Errorf("expected true")
+		}
 	})
 }
 

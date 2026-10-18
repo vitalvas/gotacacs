@@ -6,9 +6,6 @@ import (
 	"io"
 	"net"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type invalidCountWriter struct{}
@@ -27,7 +24,9 @@ func TestReadRawPacketRoundTrip(t *testing.T) {
 			Length:    3,
 		}
 		headerBuf, err := header.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		body := []byte{0x01, 0x02, 0x03}
 
 		serverConn, clientConn := net.Pipe()
@@ -39,15 +38,23 @@ func TestReadRawPacketRoundTrip(t *testing.T) {
 		}()
 
 		gotHeader, gotBody, err := ReadRawPacket(clientConn, DefaultMaxBodyLength)
-		require.NoError(t, err)
-		assert.Equal(t, headerBuf, gotHeader)
-		assert.Equal(t, body, gotBody)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(gotHeader, headerBuf) {
+			t.Errorf("got %v, want %v", gotHeader, headerBuf)
+		}
+		if !bytes.Equal(gotBody, body) {
+			t.Errorf("got %v, want %v", gotBody, body)
+		}
 	})
 
 	t.Run("empty body", func(t *testing.T) {
 		header := &Header{Version: 0xc0, Type: PacketTypeAcct, SeqNo: 1, SessionID: 7, Length: 0}
 		headerBuf, err := header.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConn, clientConn := net.Pipe()
 		defer clientConn.Close()
@@ -58,9 +65,15 @@ func TestReadRawPacketRoundTrip(t *testing.T) {
 		}()
 
 		gotHeader, gotBody, err := ReadRawPacket(clientConn, DefaultMaxBodyLength)
-		require.NoError(t, err)
-		assert.Equal(t, headerBuf, gotHeader)
-		assert.Empty(t, gotBody)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(gotHeader, headerBuf) {
+			t.Errorf("got %v, want %v", gotHeader, headerBuf)
+		}
+		if len(gotBody) != 0 {
+			t.Errorf("expected empty, got %v", gotBody)
+		}
 	})
 }
 
@@ -68,7 +81,9 @@ func TestReadRawPacketRejects(t *testing.T) {
 	t.Run("oversized body", func(t *testing.T) {
 		header := &Header{Version: 0xc0, Type: PacketTypeAuthen, SeqNo: 1, SessionID: 1, Length: 100}
 		headerBuf, err := header.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		serverConn, clientConn := net.Pipe()
 		defer clientConn.Close()
@@ -79,8 +94,12 @@ func TestReadRawPacketRejects(t *testing.T) {
 		}()
 
 		_, _, err = ReadRawPacket(clientConn, 10)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrBodyTooLarge)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBodyTooLarge) {
+			t.Errorf("error %v is not %v", err, ErrBodyTooLarge)
+		}
 	})
 
 	t.Run("short header", func(t *testing.T) {
@@ -93,8 +112,12 @@ func TestReadRawPacketRejects(t *testing.T) {
 		}()
 
 		_, _, err := ReadRawPacket(clientConn, DefaultMaxBodyLength)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("error %v is not %v", err, io.ErrUnexpectedEOF)
+		}
 	})
 
 	t.Run("invalid header", func(t *testing.T) {
@@ -113,25 +136,35 @@ func TestReadRawPacketRejects(t *testing.T) {
 		}()
 
 		_, _, err := ReadRawPacket(clientConn, DefaultMaxBodyLength)
-		require.Error(t, err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
 	})
 }
 
 func TestWriteRawPacketRejectsInvalidWriteCount(t *testing.T) {
 	header := &Header{Version: 0xc0, Type: PacketTypeAcct, SeqNo: 1, SessionID: 1}
 	headerBuf, err := header.MarshalBinary()
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	err = WriteRawPacket(invalidCountWriter{}, headerBuf, nil)
-	assert.ErrorIs(t, err, io.ErrShortWrite)
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Errorf("error %v is not %v", err, io.ErrShortWrite)
+	}
 }
 
 func TestWriteRawPacketRejectsInvalidFraming(t *testing.T) {
 	t.Run("short header", func(t *testing.T) {
 		var dst bytes.Buffer
 		err := WriteRawPacket(&dst, []byte{1, 2, 3}, nil)
-		assert.ErrorIs(t, err, ErrInvalidHeader)
-		assert.Empty(t, dst.Bytes())
+		if !errors.Is(err, ErrInvalidHeader) {
+			t.Errorf("error %v is not %v", err, ErrInvalidHeader)
+		}
+		if len(dst.Bytes()) != 0 {
+			t.Errorf("expected empty, got %v", dst.Bytes())
+		}
 	})
 
 	t.Run("invalid header", func(t *testing.T) {
@@ -140,32 +173,50 @@ func TestWriteRawPacketRejectsInvalidFraming(t *testing.T) {
 		header[2] = 1
 		var dst bytes.Buffer
 		err := WriteRawPacket(&dst, header, nil)
-		assert.ErrorIs(t, err, ErrInvalidVersion)
-		assert.Empty(t, dst.Bytes())
+		if !errors.Is(err, ErrInvalidVersion) {
+			t.Errorf("error %v is not %v", err, ErrInvalidVersion)
+		}
+		if len(dst.Bytes()) != 0 {
+			t.Errorf("expected empty, got %v", dst.Bytes())
+		}
 	})
 
 	t.Run("body length mismatch", func(t *testing.T) {
 		header := &Header{Version: 0xc0, Type: PacketTypeAcct, SeqNo: 1, SessionID: 1, Length: 2}
 		headerBuf, err := header.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		var dst bytes.Buffer
 		err = WriteRawPacket(&dst, headerBuf, []byte{1})
-		assert.ErrorIs(t, err, ErrInvalidPacket)
-		assert.Empty(t, dst.Bytes())
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
+		if len(dst.Bytes()) != 0 {
+			t.Errorf("expected empty, got %v", dst.Bytes())
+		}
 	})
 }
 
 func TestServeConnNilConnection(t *testing.T) {
 	t.Run("nil interface", func(t *testing.T) {
 		err := NewServer().ServeConn(nil)
-		require.Error(t, err)
-		assert.False(t, errors.Is(err, net.ErrClosed))
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if errors.Is(err, net.ErrClosed) {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("typed nil", func(t *testing.T) {
 		var conn *net.TCPConn
 		err := NewServer().ServeConn(conn)
-		require.Error(t, err)
-		assert.False(t, errors.Is(err, net.ErrClosed))
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if errors.Is(err, net.ErrClosed) {
+			t.Errorf("expected false")
+		}
 	})
 }

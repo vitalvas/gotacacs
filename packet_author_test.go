@@ -3,23 +3,37 @@ package gotacacs
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestNewAuthorRequest(t *testing.T) {
 	t.Run("basic creation", func(t *testing.T) {
 		p := NewAuthorRequest(AuthenTypePAP, AuthenTypeASCII, AuthenServiceLogin, "testuser")
-		assert.Equal(t, uint8(AuthenTypePAP), p.AuthenMethod)
-		assert.Equal(t, uint8(1), p.PrivLevel)
-		assert.Equal(t, uint8(AuthenTypeASCII), p.AuthenType)
-		assert.Equal(t, uint8(AuthenServiceLogin), p.Service)
-		assert.Equal(t, []byte("testuser"), p.User)
-		assert.Nil(t, p.Port)
-		assert.Nil(t, p.RemoteAddr)
-		assert.Nil(t, p.RawArgs)
+		if p.AuthenMethod != uint8(AuthenTypePAP) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(AuthenTypePAP))
+		}
+		if p.PrivLevel != uint8(1) {
+			t.Errorf("got %v, want %v", p.PrivLevel, uint8(1))
+		}
+		if p.AuthenType != uint8(AuthenTypeASCII) {
+			t.Errorf("got %v, want %v", p.AuthenType, uint8(AuthenTypeASCII))
+		}
+		if p.Service != uint8(AuthenServiceLogin) {
+			t.Errorf("got %v, want %v", p.Service, uint8(AuthenServiceLogin))
+		}
+		if !bytes.Equal(p.User, []byte("testuser")) {
+			t.Errorf("got %v, want %v", p.User, []byte("testuser"))
+		}
+		if p.Port != nil {
+			t.Errorf("expected nil, got %v", p.Port)
+		}
+		if p.RemoteAddr != nil {
+			t.Errorf("expected nil, got %v", p.RemoteAddr)
+		}
+		if p.RawArgs != nil {
+			t.Errorf("expected nil, got %v", p.RawArgs)
+		}
 	})
 }
 
@@ -27,8 +41,12 @@ func TestAuthorRequestAddArg(t *testing.T) {
 	t.Run("add single arg", func(t *testing.T) {
 		p := &AuthorRequest{}
 		p.AddArg("service=shell")
-		assert.Len(t, p.RawArgs, 1)
-		assert.Equal(t, []byte("service=shell"), p.RawArgs[0])
+		if len(p.RawArgs) != 1 {
+			t.Errorf("len = %d, want %d", len(p.RawArgs), 1)
+		}
+		if !bytes.Equal(p.RawArgs[0], []byte("service=shell")) {
+			t.Errorf("got %v, want %v", p.RawArgs[0], []byte("service=shell"))
+		}
 	})
 
 	t.Run("add multiple args", func(t *testing.T) {
@@ -36,7 +54,9 @@ func TestAuthorRequestAddArg(t *testing.T) {
 		p.AddArg("service=shell")
 		p.AddArg("cmd=show")
 		p.AddArg("cmd-arg=version")
-		assert.Len(t, p.RawArgs, 3)
+		if len(p.RawArgs) != 3 {
+			t.Errorf("len = %d, want %d", len(p.RawArgs), 3)
+		}
 	})
 }
 
@@ -49,13 +69,17 @@ func TestAuthorRequestArgs(t *testing.T) {
 			},
 		}
 		args := p.Args()
-		assert.Equal(t, []string{"service=shell", "cmd=show"}, args)
+		if !reflect.DeepEqual(args, []string{"service=shell", "cmd=show"}) {
+			t.Errorf("got %v, want %v", args, []string{"service=shell", "cmd=show"})
+		}
 	})
 
 	t.Run("empty args", func(t *testing.T) {
 		p := &AuthorRequest{}
 		args := p.Args()
-		assert.Empty(t, args)
+		if len(args) != 0 {
+			t.Errorf("expected empty, got %v", args)
+		}
 	})
 }
 
@@ -69,11 +93,15 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Verify fixed 8-byte header for authorization request
 		expected := []byte{AuthenTypePAP, 1, AuthenTypeASCII, AuthenServiceLogin, 0, 0, 0, 0}
-		assert.Equal(t, expected, data)
+		if !bytes.Equal(data, expected) {
+			t.Errorf("got %v, want %v", data, expected)
+		}
 	})
 
 	t.Run("with all fields and args", func(t *testing.T) {
@@ -89,18 +117,34 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// 8 header + 2 arg lens + 5 user + 4 port + 11 rem_addr + 13 + 8 args
 		expectedLen := 8 + 2 + 5 + 4 + 11 + 13 + 8
-		require.Len(t, data, expectedLen)
+		if len(data) != expectedLen {
+			t.Fatalf("len = %d, want %d", len(data), expectedLen)
+		}
 
-		assert.Equal(t, uint8(5), data[4])  // user_len
-		assert.Equal(t, uint8(4), data[5])  // port_len
-		assert.Equal(t, uint8(11), data[6]) // rem_addr_len
-		assert.Equal(t, uint8(2), data[7])  // arg_cnt
-		assert.Equal(t, uint8(13), data[8]) // arg1 len
-		assert.Equal(t, uint8(8), data[9])  // arg2 len
+		if data[4] != uint8(5) {
+			t.Errorf("got %v, want %v", data[4], uint8(5)) // user_len
+		}
+		if data[5] != uint8(4) {
+			t.Errorf("got %v, want %v", data[5], uint8(4)) // port_len
+		}
+		if data[6] != uint8(11) {
+			t.Errorf("got %v, want %v", data[6], uint8(11)) // rem_addr_len
+		}
+		if data[7] != uint8(2) {
+			t.Errorf("got %v, want %v", data[7], uint8(2)) // arg_cnt
+		}
+		if data[8] != uint8(13) {
+			t.Errorf("got %v, want %v", data[8], uint8(13)) // arg1 len
+		}
+		if data[9] != uint8(8) {
+			t.Errorf("got %v, want %v", data[9], uint8(8)) // arg2 len
+		}
 	})
 
 	t.Run("field too long", func(t *testing.T) {
@@ -109,8 +153,12 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 
 	t.Run("too many args", func(t *testing.T) {
@@ -119,8 +167,12 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 
 	t.Run("arg too long", func(t *testing.T) {
@@ -129,8 +181,12 @@ func TestAuthorRequestMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 }
 
@@ -140,12 +196,22 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint8(0x02), p.AuthenMethod)
-		assert.Equal(t, uint8(0x01), p.PrivLevel)
-		assert.Nil(t, p.User)
-		assert.Nil(t, p.RawArgs)
+		if p.AuthenMethod != uint8(0x02) {
+			t.Errorf("got %v, want %v", p.AuthenMethod, uint8(0x02))
+		}
+		if p.PrivLevel != uint8(0x01) {
+			t.Errorf("got %v, want %v", p.PrivLevel, uint8(0x01))
+		}
+		if p.User != nil {
+			t.Errorf("expected nil, got %v", p.User)
+		}
+		if p.RawArgs != nil {
+			t.Errorf("expected nil, got %v", p.RawArgs)
+		}
 	})
 
 	t.Run("buffer too short for header", func(t *testing.T) {
@@ -153,8 +219,12 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("buffer too short for arg lengths", func(t *testing.T) {
@@ -162,8 +232,12 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("buffer too short for args", func(t *testing.T) {
@@ -172,8 +246,12 @@ func TestAuthorRequestUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 }
 
@@ -246,24 +324,48 @@ func TestAuthorRequestMarshalUnmarshalRoundtrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Marshal original packet
 			data, err := tc.packet.MarshalBinary()
-			require.NoError(t, err)
-			require.NotEmpty(t, data)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(data) == 0 {
+				t.Fatal("expected non-empty")
+			}
 
 			// Unmarshal into new packet and verify all authorization-specific fields
 			decoded := &AuthorRequest{}
-			require.NoError(t, decoded.UnmarshalBinary(data))
+			if err := decoded.UnmarshalBinary(data); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			// Verify authorization request specific structure
-			assert.Equal(t, tc.packet.AuthenMethod, decoded.AuthenMethod, "authen_method mismatch")
-			assert.Equal(t, tc.packet.PrivLevel, decoded.PrivLevel, "priv_lvl mismatch")
-			assert.Equal(t, tc.packet.AuthenType, decoded.AuthenType, "authen_type mismatch")
-			assert.Equal(t, tc.packet.Service, decoded.Service, "service mismatch")
-			assert.Equal(t, tc.packet.User, decoded.User, "user mismatch")
-			assert.Equal(t, tc.packet.Port, decoded.Port, "port mismatch")
-			assert.Equal(t, tc.packet.RemoteAddr, decoded.RemoteAddr, "rem_addr mismatch")
-			assert.Equal(t, len(tc.packet.RawArgs), len(decoded.RawArgs), "args count mismatch")
+			if decoded.AuthenMethod != tc.packet.AuthenMethod {
+				t.Errorf("authen_method mismatch: got %v, want %v", decoded.AuthenMethod, tc.packet.AuthenMethod)
+			}
+			if decoded.PrivLevel != tc.packet.PrivLevel {
+				t.Errorf("priv_lvl mismatch: got %v, want %v", decoded.PrivLevel, tc.packet.PrivLevel)
+			}
+			if decoded.AuthenType != tc.packet.AuthenType {
+				t.Errorf("authen_type mismatch: got %v, want %v", decoded.AuthenType, tc.packet.AuthenType)
+			}
+			if decoded.Service != tc.packet.Service {
+				t.Errorf("service mismatch: got %v, want %v", decoded.Service, tc.packet.Service)
+			}
+			if !bytes.Equal(decoded.User, tc.packet.User) {
+				t.Errorf("user mismatch: got %v, want %v", decoded.User, tc.packet.User)
+			}
+			if !bytes.Equal(decoded.Port, tc.packet.Port) {
+				t.Errorf("port mismatch: got %v, want %v", decoded.Port, tc.packet.Port)
+			}
+			if !bytes.Equal(decoded.RemoteAddr, tc.packet.RemoteAddr) {
+				t.Errorf("rem_addr mismatch: got %v, want %v", decoded.RemoteAddr, tc.packet.RemoteAddr)
+			}
+			if len(decoded.RawArgs) != len(tc.packet.RawArgs) {
+				t.Errorf("args count mismatch: got %v, want %v", len(decoded.RawArgs), len(tc.packet.RawArgs))
+			}
 			for i := range tc.packet.RawArgs {
-				assert.Equal(t, tc.packet.RawArgs[i], decoded.RawArgs[i], "arg %d mismatch", i)
+				if !bytes.Equal(decoded.RawArgs[i], tc.packet.RawArgs[i]) {
+					t.Errorf("arg %d mismatch: got %v, want %v", i, decoded.RawArgs[i], tc.packet.RawArgs[i])
+				}
 			}
 		})
 	}
@@ -274,7 +376,9 @@ func TestAuthorResponseAddArg(t *testing.T) {
 		p := &AuthorResponse{}
 		p.AddArg("priv-lvl=15")
 		p.AddArg("timeout=60")
-		assert.Len(t, p.RawArgs, 2)
+		if len(p.RawArgs) != 2 {
+			t.Errorf("len = %d, want %d", len(p.RawArgs), 2)
+		}
 	})
 }
 
@@ -287,7 +391,9 @@ func TestAuthorResponseArgs(t *testing.T) {
 			},
 		}
 		args := p.Args()
-		assert.Equal(t, []string{"priv-lvl=15", "timeout=60"}, args)
+		if !reflect.DeepEqual(args, []string{"priv-lvl=15", "timeout=60"}) {
+			t.Errorf("got %v, want %v", args, []string{"priv-lvl=15", "timeout=60"})
+		}
 	})
 }
 
@@ -298,11 +404,19 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
-		require.Len(t, data, 6)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(data) != 6 {
+			t.Fatalf("len = %d, want %d", len(data), 6)
+		}
 
-		assert.Equal(t, uint8(AuthorStatusPassAdd), data[0])
-		assert.Equal(t, uint8(0), data[1]) // arg_cnt
+		if data[0] != uint8(AuthorStatusPassAdd) {
+			t.Errorf("got %v, want %v", data[0], uint8(AuthorStatusPassAdd))
+		}
+		if data[1] != uint8(0) {
+			t.Errorf("got %v, want %v", data[1], uint8(0)) // arg_cnt
+		}
 	})
 
 	t.Run("with message and args", func(t *testing.T) {
@@ -313,11 +427,15 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// 6 header + 1 arg len + 10 server_msg + 11 arg
 		expectedLen := 6 + 1 + 10 + 11
-		require.Len(t, data, expectedLen)
+		if len(data) != expectedLen {
+			t.Fatalf("len = %d, want %d", len(data), expectedLen)
+		}
 	})
 
 	t.Run("field too long", func(t *testing.T) {
@@ -326,8 +444,12 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 
 	t.Run("too many args", func(t *testing.T) {
@@ -336,8 +458,12 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 
 	t.Run("arg too long", func(t *testing.T) {
@@ -346,8 +472,12 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 		}
 
 		_, err := p.MarshalBinary()
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrInvalidPacket))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrInvalidPacket) {
+			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		}
 	})
 }
 
@@ -357,12 +487,22 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Equal(t, uint8(AuthorStatusPassAdd), p.Status)
-		assert.Nil(t, p.RawArgs)
-		assert.Nil(t, p.ServerMsg)
-		assert.Nil(t, p.Data)
+		if p.Status != uint8(AuthorStatusPassAdd) {
+			t.Errorf("got %v, want %v", p.Status, uint8(AuthorStatusPassAdd))
+		}
+		if p.RawArgs != nil {
+			t.Errorf("expected nil, got %v", p.RawArgs)
+		}
+		if p.ServerMsg != nil {
+			t.Errorf("expected nil, got %v", p.ServerMsg)
+		}
+		if p.Data != nil {
+			t.Errorf("expected nil, got %v", p.Data)
+		}
 	})
 
 	t.Run("buffer too short for header", func(t *testing.T) {
@@ -370,8 +510,12 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("buffer too short for arg lengths", func(t *testing.T) {
@@ -379,8 +523,12 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 
 	t.Run("buffer too short for fields", func(t *testing.T) {
@@ -389,8 +537,12 @@ func TestAuthorResponseUnmarshalBinary(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		assert.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort))
+		if err == nil {
+			t.Errorf("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("error %v is not %v", err, ErrBufferTooShort)
+		}
 	})
 }
 
@@ -441,46 +593,82 @@ func TestAuthorResponseMarshalUnmarshalRoundtrip(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := tc.packet.MarshalBinary()
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			decoded := &AuthorResponse{}
 			err = decoded.UnmarshalBinary(data)
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-			assert.Equal(t, tc.packet.Status, decoded.Status)
-			assert.Equal(t, tc.packet.RawArgs, decoded.RawArgs)
-			assert.Equal(t, tc.packet.ServerMsg, decoded.ServerMsg)
-			assert.Equal(t, tc.packet.Data, decoded.Data)
+			if decoded.Status != tc.packet.Status {
+				t.Errorf("got %v, want %v", decoded.Status, tc.packet.Status)
+			}
+			if !reflect.DeepEqual(decoded.RawArgs, tc.packet.RawArgs) {
+				t.Errorf("got %v, want %v", decoded.RawArgs, tc.packet.RawArgs)
+			}
+			if !bytes.Equal(decoded.ServerMsg, tc.packet.ServerMsg) {
+				t.Errorf("got %v, want %v", decoded.ServerMsg, tc.packet.ServerMsg)
+			}
+			if !bytes.Equal(decoded.Data, tc.packet.Data) {
+				t.Errorf("got %v, want %v", decoded.Data, tc.packet.Data)
+			}
 		})
 	}
 }
 
 func TestAuthorResponseHelperMethods(t *testing.T) {
 	t.Run("IsPass", func(t *testing.T) {
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusPassAdd}).IsPass())
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusPassRepl}).IsPass())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusFail}).IsPass())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusError}).IsPass())
+		if !(&AuthorResponse{Status: AuthorStatusPassAdd}).IsPass() {
+			t.Errorf("expected true")
+		}
+		if !(&AuthorResponse{Status: AuthorStatusPassRepl}).IsPass() {
+			t.Errorf("expected true")
+		}
+		if (&AuthorResponse{Status: AuthorStatusFail}).IsPass() {
+			t.Errorf("expected false")
+		}
+		if (&AuthorResponse{Status: AuthorStatusError}).IsPass() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("IsPassAdd", func(t *testing.T) {
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusPassAdd}).IsPassAdd())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusPassRepl}).IsPassAdd())
+		if !(&AuthorResponse{Status: AuthorStatusPassAdd}).IsPassAdd() {
+			t.Errorf("expected true")
+		}
+		if (&AuthorResponse{Status: AuthorStatusPassRepl}).IsPassAdd() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("IsPassRepl", func(t *testing.T) {
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusPassRepl}).IsPassRepl())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusPassAdd}).IsPassRepl())
+		if !(&AuthorResponse{Status: AuthorStatusPassRepl}).IsPassRepl() {
+			t.Errorf("expected true")
+		}
+		if (&AuthorResponse{Status: AuthorStatusPassAdd}).IsPassRepl() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("IsFail", func(t *testing.T) {
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusFail}).IsFail())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusPassAdd}).IsFail())
+		if !(&AuthorResponse{Status: AuthorStatusFail}).IsFail() {
+			t.Errorf("expected true")
+		}
+		if (&AuthorResponse{Status: AuthorStatusPassAdd}).IsFail() {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("IsError", func(t *testing.T) {
-		assert.True(t, (&AuthorResponse{Status: AuthorStatusError}).IsError())
-		assert.False(t, (&AuthorResponse{Status: AuthorStatusPassAdd}).IsError())
+		if !(&AuthorResponse{Status: AuthorStatusError}).IsError() {
+			t.Errorf("expected true")
+		}
+		if (&AuthorResponse{Status: AuthorStatusPassAdd}).IsError() {
+			t.Errorf("expected false")
+		}
 	})
 }
 
@@ -495,15 +683,25 @@ func TestAuthorRequestEmptyArgs(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		decoded := &AuthorRequest{}
 		err = decoded.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Len(t, decoded.RawArgs, 2)
-		assert.Nil(t, decoded.RawArgs[0]) // Empty byte slice becomes nil
-		assert.Equal(t, []byte("test"), decoded.RawArgs[1])
+		if len(decoded.RawArgs) != 2 {
+			t.Errorf("len = %d, want %d", len(decoded.RawArgs), 2)
+		}
+		if decoded.RawArgs[0] != nil { // Empty byte slice becomes nil
+			t.Errorf("expected nil, got %v", decoded.RawArgs[0])
+		}
+		if !bytes.Equal(decoded.RawArgs[1], []byte("test")) {
+			t.Errorf("got %v, want %v", decoded.RawArgs[1], []byte("test"))
+		}
 	})
 }
 
@@ -515,15 +713,25 @@ func TestAuthorResponseEmptyArgs(t *testing.T) {
 		}
 
 		data, err := p.MarshalBinary()
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		decoded := &AuthorResponse{}
 		err = decoded.UnmarshalBinary(data)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
-		assert.Len(t, decoded.RawArgs, 2)
-		assert.Nil(t, decoded.RawArgs[0]) // Empty byte slice becomes nil
-		assert.Equal(t, []byte("test"), decoded.RawArgs[1])
+		if len(decoded.RawArgs) != 2 {
+			t.Errorf("len = %d, want %d", len(decoded.RawArgs), 2)
+		}
+		if decoded.RawArgs[0] != nil { // Empty byte slice becomes nil
+			t.Errorf("expected nil, got %v", decoded.RawArgs[0])
+		}
+		if !bytes.Equal(decoded.RawArgs[1], []byte("test")) {
+			t.Errorf("got %v, want %v", decoded.RawArgs[1], []byte("test"))
+		}
 	})
 }
 
@@ -538,8 +746,12 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("expected ErrBadSecret, got: %v", err)
+		}
 	})
 
 	t.Run("AuthorRequest normal truncation should not be bad secret", func(t *testing.T) {
@@ -551,9 +763,15 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBufferTooShort), "expected ErrBufferTooShort, got: %v", err)
-		assert.False(t, errors.Is(err, ErrBadSecret))
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBufferTooShort) {
+			t.Errorf("expected ErrBufferTooShort, got: %v", err)
+		}
+		if errors.Is(err, ErrBadSecret) {
+			t.Errorf("expected false")
+		}
 	})
 
 	t.Run("AuthorResponse with garbage lengths", func(t *testing.T) {
@@ -568,8 +786,12 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("expected ErrBadSecret, got: %v", err)
+		}
 	})
 
 	t.Run("AuthorRequest bad secret on second length check", func(t *testing.T) {
@@ -585,8 +807,12 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 
 		p := &AuthorRequest{}
 		err := p.UnmarshalBinary(data)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("expected ErrBadSecret, got: %v", err)
+		}
 	})
 
 	t.Run("AuthorResponse bad secret on second length check", func(t *testing.T) {
@@ -604,8 +830,12 @@ func TestAuthorBadSecretDetection(t *testing.T) {
 
 		p := &AuthorResponse{}
 		err := p.UnmarshalBinary(data)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrBadSecret), "expected ErrBadSecret, got: %v", err)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("expected ErrBadSecret, got: %v", err)
+		}
 	})
 }
 
