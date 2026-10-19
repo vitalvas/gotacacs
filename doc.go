@@ -3,8 +3,8 @@
 // Authorization, and Accounting (AAA) services.
 //
 // TACACS+ is a security protocol that provides centralized access control
-// for network devices. This package supports TCP and TLS transports with
-// body obfuscation using MD5-based pseudo-pad generation.
+// for network devices. This package supports shared-secret body obfuscation
+// over TCP and TLS 1.3 transport with obfuscation disabled.
 //
 // # Client Usage
 //
@@ -15,6 +15,7 @@
 //		gotacacs.WithSecret("sharedsecret"),
 //		gotacacs.WithTimeout(30*time.Second),
 //	)
+//	defer client.Close()
 //
 //	// Authenticate a user
 //	reply, err := client.Authenticate(ctx, "username", "password")
@@ -35,7 +36,11 @@
 //	}
 //
 //	// Send accounting records
-//	acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{"task_id=123"})
+//	acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{
+//		"task_id=123",
+//		"service=shell",
+//		"cmd=",
+//	})
 //	if err != nil {
 //		log.Fatal(err)
 //	}
@@ -64,11 +69,17 @@
 //
 // # Handler Implementation
 //
-// Implement the Handler interface to process requests:
+// Implement the Handler interface to process requests. This example supports
+// PAP login; ASCII authentication requires application state for each step:
 //
 //	type myHandler struct{}
 //
 //	func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+//		if req.Start.Action != gotacacs.AuthenActionLogin ||
+//			req.Start.AuthenType != gotacacs.AuthenTypePAP ||
+//			req.Start.Service != gotacacs.AuthenServiceLogin {
+//			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+//		}
 //		if string(req.Start.User) == "admin" && string(req.Start.Data) == "password" {
 //			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
 //		}
@@ -76,7 +87,7 @@
 //	}
 //
 //	func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
-//		return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
+//		return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusError, ServerMsg: []byte("CONTINUE not supported")}
 //	}
 //
 //	func (h *myHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
@@ -114,24 +125,42 @@
 //
 // # TLS Support (RFC 9887)
 //
-// Both client and server support TLS 1.3 for secure communication.
-// When using TLS, the shared secret is not needed as TLS provides encryption:
+// Both client and server support TLS 1.3. RFC 9887 requires mutual
+// authentication. Configure client and server certificates and trusted CA
+// pools; the shared obfuscation secret is not used on TLS connections:
 //
 //	// Client with TLS
 //	tlsConfig := &tls.Config{
-//		RootCAs: certPool,
+//		Certificates: []tls.Certificate{clientCert},
+//		RootCAs:      serverCAs,
+//		ServerName:   "tacacs.example.com",
 //	}
 //	client := gotacacs.NewClient(
 //		gotacacs.WithAddress("tacacs.example.com:300"),
 //		gotacacs.WithTLSConfig(tlsConfig),
 //	)
+//	defer client.Close()
 //
 //	// Server with TLS
-//	ln, err := gotacacs.ListenTLS(":300", tlsConfig)
+//	ln, err := gotacacs.ListenTLS(":300", &tls.Config{
+//		Certificates: []tls.Certificate{serverCert},
+//		ClientCAs:    clientCAs,
+//		ClientAuth:   tls.RequireAndVerifyClientCert,
+//	})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+// The certificate variables above are loaded with tls.LoadX509KeyPair; the CA
+// pools contain the trusted issuers for each peer. Applications must also
+// configure the peer identity and certificate revocation checks required by
+// RFC 9887 through tls.Config, including VerifyConnection. Go's default
+// certificate verifier does not check revocation.
 //
 // # Single-Connect Mode
 //
-// Enable single-connect mode to reuse connections for multiple requests:
+// Enable single-connect mode to request connection reuse. The first reply
+// determines whether the server accepted it; later flags do not renegotiate:
 //
 //	client := gotacacs.NewClient(
 //		gotacacs.WithAddress("tacacs.example.com:49"),
@@ -139,6 +168,17 @@
 //		gotacacs.WithSingleConnect(true),
 //	)
 //	defer client.Close()
+//
+// Context cancellation interrupts in-flight client network I/O and closes the
+// connection. ASCII prompt callbacks run synchronously and must handle their
+// own input cancellation. Server read timeouts also bound TLS handshakes.
+//
+// # Caller-Supplied Connections
+//
+// Server.ServeConn handles an existing net.Conn without requiring a listener.
+// It shares the Serve packet handling loop and participates in Shutdown.
+// ReadRawPacket and WriteRawPacket provide bounded raw packet forwarding
+// without applying obfuscation or TLS flag policy.
 //
 // For more information about the TACACS+ protocol, see RFC8907:
 // https://datatracker.ietf.org/doc/html/rfc8907

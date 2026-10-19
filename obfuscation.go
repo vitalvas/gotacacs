@@ -9,9 +9,9 @@ import (
 // The operation is symmetric (XOR), so the same function is used for both operations.
 // As defined in RFC8907 Section 4.5, the pseudo-pad is computed as:
 //
-//	pseudo_pad = {MD5(session_id + secret + version + seq_no) +
-//	              MD5(session_id + secret + version + seq_no + pseudo_pad[0..15]) +
-//	              MD5(session_id + secret + version + seq_no + pseudo_pad[0..31]) + ...}
+//	hash1 = MD5(session_id || secret || version || seq_no)
+//	hashN = MD5(session_id || secret || version || seq_no || hash(N-1)), N > 1
+//	pseudo_pad = hash1 || hash2 || hash3 || ...
 //
 // The body is XORed with the pseudo-pad to produce the obfuscated/deobfuscated result.
 //

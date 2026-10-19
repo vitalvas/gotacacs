@@ -43,8 +43,8 @@ var (
 	// ErrBodyTooLarge indicates the packet body exceeds maximum size.
 	ErrBodyTooLarge = errors.New("body too large")
 
-	// ErrAuthenFollow indicates the server requested authentication follow.
-	// The client should connect to an alternate server specified in ServerMsg.
+	// ErrAuthenFollow indicates the server returned the authentication FOLLOW status.
+	// Authentication methods return the reply along with this error.
 	ErrAuthenFollow = errors.New("authentication follow requested")
 
 	// ErrAuthenRestart indicates the server requested authentication restart.

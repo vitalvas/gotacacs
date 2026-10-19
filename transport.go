@@ -91,17 +91,23 @@ type TLSDialer struct {
 	Timeout time.Duration
 
 	// Config is the TLS configuration to use.
-	// If nil, a default configuration is used.
+	// It is cloned and its minimum version is raised to TLS 1.3 when necessary.
+	// If nil, a default TLS 1.3 configuration is used.
 	Config *tls.Config
 }
 
 // Dial connects to the address using TLS.
 func (d *TLSDialer) Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	if d.Config != nil {
+		cfg = d.Config.Clone()
+		cfg.MinVersion = max(cfg.MinVersion, tls.VersionTLS13)
+	}
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{
 			Timeout: d.Timeout,
 		},
-		Config: d.Config,
+		Config: cfg,
 	}
 
 	conn, err := dialer.DialContext(ctx, network, address)
@@ -125,7 +131,8 @@ func ListenTCP(address string) (Listener, error) {
 	return ln, nil
 }
 
-// ListenTLS creates a TLS listener on the specified address.
+// ListenTLS creates a TLS 1.3 listener on the specified address.
+// It clones config and sets both MinVersion and MaxVersion to TLS 1.3.
 func ListenTLS(address string, config *tls.Config) (Listener, error) {
 	if config == nil {
 		return nil, fmt.Errorf("TLS config is required")

@@ -478,6 +478,49 @@ func TestIsTLSConn(t *testing.T) {
 	})
 }
 
+func TestTLSDialerRejectsTLS12(t *testing.T) {
+	cert, err := generateTestCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.(*tls.Conn).Handshake()
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		<-done
+	})
+	cfg := &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS12,
+	}
+	dialer := &TLSDialer{Timeout: time.Second, Config: cfg}
+	conn, err := dialer.Dial(context.Background(), "tcp", ln.Addr().String())
+	if err == nil {
+		conn.Close()
+		t.Error("TLSDialer negotiated TLS 1.2")
+	}
+	if cfg.MinVersion != tls.VersionTLS12 {
+		t.Error("dialer mutated the caller's TLS configuration")
+	}
+}
+
 func TestTLSConnInterface(t *testing.T) {
 	t.Run("tls.Conn implements TLSConn interface", func(t *testing.T) {
 		cert, err := generateTestCertificate()

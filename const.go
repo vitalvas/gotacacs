@@ -134,7 +134,7 @@ const (
 	// AuthenStatusError indicates an error occurred.
 	AuthenStatusError AuthenStatus = 0x07
 
-	// AuthenStatusFollow indicates the client should follow to another server.
+	// AuthenStatusFollow is the authentication FOLLOW status.
 	AuthenStatusFollow AuthenStatus = 0x21
 )
 
@@ -213,7 +213,7 @@ const (
 	// AuthorStatusError indicates an error occurred.
 	AuthorStatusError AuthorStatus = 0x11
 
-	// AuthorStatusFollow indicates the client should follow to another server.
+	// AuthorStatusFollow is the authorization FOLLOW status.
 	AuthorStatusFollow AuthorStatus = 0x21
 )
 
@@ -243,7 +243,7 @@ const (
 	// AcctStatusError indicates an error occurred.
 	AcctStatusError AcctStatus = 0x02
 
-	// AcctStatusFollow indicates the client should follow to another server.
+	// AcctStatusFollow is the accounting FOLLOW status.
 	AcctStatusFollow AcctStatus = 0x21
 )
 

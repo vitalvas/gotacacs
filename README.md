@@ -6,8 +6,8 @@ Provides both client and server SDK interfaces for Authentication, Authorization
 
 ## Features
 
-- Full TACACS+ protocol implementation (RFC 8907)
-- TLS 1.3 transport compliance (RFC 9887)
+- TACACS+ authentication, authorization, and accounting packet types (RFC 8907)
+- TLS 1.3 transport support (RFC 9887)
 - Client SDK with high-level API (PAP and ASCII interactive authentication)
 - Server SDK with pluggable handler interfaces
 - TCP and TLS transport support
@@ -36,6 +36,7 @@ client := gotacacs.NewClient(
     gotacacs.WithAddress("tacacs.example.com:49"),
     gotacacs.WithSecret("sharedsecret"),
 )
+defer client.Close()
 
 // Authentication (PAP)
 reply, err := client.Authenticate(ctx, "username", "password")
@@ -56,7 +57,11 @@ if resp.IsPass() {
 }
 
 // Accounting
-acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{"task_id=123"})
+acctReply, err := client.Accounting(ctx, gotacacs.AcctFlagStart, "username", []string{
+    "task_id=123",
+    "service=shell",
+    "cmd=",
+})
 if err != nil {
     log.Fatal(err)
 }
@@ -84,12 +89,17 @@ if err := server.Serve(); err != nil {
 }
 ```
 
-Implement the `Handler` interface:
+Implement the `Handler` interface. This example supports PAP login:
 
 ```go
 type myHandler struct{}
 
 func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    if req.Start.Action != gotacacs.AuthenActionLogin ||
+        req.Start.AuthenType != gotacacs.AuthenTypePAP ||
+        req.Start.Service != gotacacs.AuthenServiceLogin {
+        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+    }
     if string(req.Start.User) == "admin" && string(req.Start.Data) == "secret" {
         return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
     }
@@ -97,7 +107,7 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
 }
 
 func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
-    return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
+    return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusError, ServerMsg: []byte("CONTINUE not supported")}
 }
 
 func (h *myHandler) HandleAuthorRequest(_ context.Context, _ *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {
@@ -134,23 +144,35 @@ server := gotacacs.NewServer(
 
 ### TLS 1.3 (RFC 9887)
 
+Configure certificates and trusted CA pools on both peers for mutual authentication:
+
 ```go
-// Client with TLS 1.3
+// clientCert and serverCert are loaded with tls.LoadX509KeyPair.
+// serverCAs and clientCAs contain the trusted CA certificates for each peer.
 client := gotacacs.NewClient(
     gotacacs.WithAddress("tacacs.example.com:300"),
     gotacacs.WithTLSConfig(&tls.Config{
-        RootCAs: certPool,
+        Certificates: []tls.Certificate{clientCert},
+        RootCAs:      serverCAs,
+        ServerName:   "tacacs.example.com",
     }),
 )
+defer client.Close()
 
 // Server with TLS
-ln, err := gotacacs.ListenTLS(":300", tlsConfig)
+ln, err := gotacacs.ListenTLS(":300", &tls.Config{
+    Certificates: []tls.Certificate{serverCert},
+    ClientCAs:    clientCAs,
+    ClientAuth:   tls.RequireAndVerifyClientCert,
+})
 if err != nil {
     log.Fatal(err)
 }
 ```
 
 When using TLS, the `FlagUnencrypted` header flag is set automatically and body obfuscation is disabled, as specified by RFC 9887.
+
+RFC 9887 also requires certificate revocation and peer identity checks. Configure these through `tls.Config`, including `VerifyConnection`; see the [client](docs/client.md#tls-configuration-rfc-9887) and [server](docs/server.md#tls-configuration-rfc-9887) guides. TCP shared-secret obfuscation does not provide TLS encryption or integrity protection.
 
 ## Examples
 
@@ -161,10 +183,12 @@ The package includes example binaries in `examples/`:
 go run ./examples/tacacs-server -addr :49 -secret sharedsecret
 go run ./examples/tacacs-client -addr localhost:49 -secret sharedsecret
 
-# TLS mode (RFC 9887)
+# Basic TLS transport demonstration (server certificate must be trusted)
 go run ./examples/tacacs-server-tls -addr :300 -cert server.crt -key server.key
 go run ./examples/tacacs-client-tls -addr localhost:300
 ```
+
+The TLS example binaries do not configure mutual authentication or certificate revocation checks. Use the SDK configuration above and the linked guides for RFC 9887 deployments.
 
 ## Documentation
 

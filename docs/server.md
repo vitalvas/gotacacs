@@ -32,7 +32,7 @@ if err := server.Serve(); err != nil {
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `WithServerListener(listener)` | Network listener | Required |
+| `WithServerListener(listener)` | Network listener for `Serve`; optional for `ServeConn` | None |
 | `WithServerSecret(secret string)` | Static shared secret | None |
 | `WithServerSecretBytes(secret []byte)` | Static shared secret as bytes | None |
 | `WithSecretProvider(provider)` | Per-client secret provider | None |
@@ -40,7 +40,7 @@ if err := server.Serve(); err != nil {
 | `WithAuthenticationHandler(handler)` | Authentication-only handler | None |
 | `WithAuthorizationHandler(handler)` | Authorization-only handler | None |
 | `WithAccountingHandler(handler)` | Accounting-only handler | None |
-| `WithServerReadTimeout(duration)` | Read timeout | 30 seconds |
+| `WithServerReadTimeout(duration)` | Packet read and TLS handshake timeout; zero disables this timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
 | `WithServerMaxBodyLength(length uint32)` | Maximum allowed request body length | 256 KiB |
 | `WithServerHooks(hooks)` | Lifecycle event hooks | None |
@@ -71,7 +71,7 @@ type AccountingHandler interface {
 }
 ```
 
-### Complete Handler Example
+### PAP Handler Example
 
 ```go
 type myHandler struct {
@@ -80,6 +80,11 @@ type myHandler struct {
 }
 
 func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    if req.Start.Action != gotacacs.AuthenActionLogin ||
+        req.Start.AuthenType != gotacacs.AuthenTypePAP ||
+        req.Start.Service != gotacacs.AuthenServiceLogin {
+        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+    }
     user := string(req.Start.User)
     password := string(req.Start.Data)
 
@@ -100,13 +105,10 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
     }
 }
 
-func (h *myHandler) HandleAuthenContinue(_ context.Context, req *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
-    // Handle multi-step authentication (ASCII mode)
-    userInput := string(req.Continue.UserMsg)
-
-    // Process input and return appropriate response
+func (h *myHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
     return &gotacacs.AuthenReply{
-        Status: gotacacs.AuthenStatusPass,
+        Status:    gotacacs.AuthenStatusError,
+        ServerMsg: []byte("CONTINUE not supported"),
     }
 }
 
@@ -145,12 +147,12 @@ func (h *myHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctReque
         user, req.Request.Flags, args, req.RemoteAddr, req.UserData)
 
     // Log or store accounting data
-    if req.Request.IsStart() {
+    if req.Request.IsWatchdog() {
+        log.Printf("Watchdog update for %s", user)
+    } else if req.Request.IsStart() {
         log.Printf("Session started for %s", user)
     } else if req.Request.IsStop() {
         log.Printf("Session stopped for %s", user)
-    } else if req.Request.IsWatchdog() {
-        log.Printf("Watchdog update for %s", user)
     }
 
     return &gotacacs.AcctReply{
@@ -226,39 +228,34 @@ type AcctRequestContext struct {
 | GETPASS | `AuthenStatusGetPass` | Request password |
 | RESTART | `AuthenStatusRestart` | Restart authentication |
 | ERROR | `AuthenStatusError` | Server error |
-| FOLLOW | `AuthenStatusFollow` | Follow to another server |
+| FOLLOW | `AuthenStatusFollow` | Client returns the reply with `ErrAuthenFollow` |
 
 ### Multi-Step Authentication
 
-For interactive (ASCII) authentication, use GETDATA/GETUSER/GETPASS:
+For ASCII authentication, handlers use GETUSER to collect a missing username, GETPASS to collect a password, and GETDATA for other input. Keep the requested input and credentials in application state scoped to the connection and `SessionID`; different connections can reuse a `SessionID`. Limit username retries; [RFC 8907 Section 5.4.2.1](https://datatracker.ietf.org/doc/html/rfc8907#section-5.4.2.1) recommends three attempts.
+
+For example, return this reply when the handler is ready to request the password:
 
 ```go
-func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
-    if len(req.Start.User) == 0 {
-        return &gotacacs.AuthenReply{
-            Status:    gotacacs.AuthenStatusGetUser,
-            ServerMsg: []byte("Username: "),
-        }
-    }
-
-    return &gotacacs.AuthenReply{
-        Status:    gotacacs.AuthenStatusGetPass,
-        ServerMsg: []byte("Password: "),
-        Flags:     gotacacs.AuthenReplyFlagNoEcho, // Don't echo password
-    }
-}
-
-func (h *myHandler) HandleAuthenContinue(_ context.Context, req *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
-    // Get session state to determine what we're waiting for
-    input := string(req.Continue.UserMsg)
-
-    // Validate and return result
-    if h.validateCredentials(input) {
-        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
-    }
-    return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+reply := &gotacacs.AuthenReply{
+    Status:    gotacacs.AuthenStatusGetPass,
+    ServerMsg: []byte("Password: "),
+    Flags:     gotacacs.AuthenReplyFlagNoEcho,
 }
 ```
+
+The next CONTINUE carries the answer in `req.Continue.UserMsg`. Validate it for the current authentication step before returning PASS. ASCII START and CONTINUE `Data` fields are unused and must be ignored.
+
+An ABORT is still delivered to `HandleAuthenContinue` so the handler can release its application state:
+
+```go
+if req.Continue.IsAbort() {
+    // Release authentication state for this connection and session.
+    return nil
+}
+```
+
+The server discards the handler's reply to ABORT, removes the tracked session, and sends no response. A connection negotiated for single-connect remains available for other sessions.
 
 ## Authorization Status Codes
 
@@ -268,7 +265,7 @@ func (h *myHandler) HandleAuthenContinue(_ context.Context, req *gotacacs.Authen
 | PASS_REPL | `AuthorStatusPassRepl` | Authorized, replace with returned args |
 | FAIL | `AuthorStatusFail` | Authorization denied |
 | ERROR | `AuthorStatusError` | Server error |
-| FOLLOW | `AuthorStatusFollow` | Follow to another server |
+| FOLLOW | `AuthorStatusFollow` | Client returns the response without automatic redirection |
 
 ### Authorization Arguments
 
@@ -302,7 +299,7 @@ values:
 values := gotacacs.ArgValues{"priv-lvl": []string{"15"}}
 values.Add("local-user-name", "remote-readonly")
 values.Add("allow-commands1", "show.*")
-values.Del("deprecated-attribute")
+values.Del("unused-attribute")
 
 resp := &gotacacs.AuthorResponse{
     Status:  gotacacs.AuthorStatusPassAdd,
@@ -310,13 +307,15 @@ resp := &gotacacs.AuthorResponse{
 }
 ```
 
+`ArgValues` parses `key=value` attributes and sorts keys when producing output. Use `RawArgs` to process optional `key*value` attributes or preserve wire order. A handler must reject authorization when it cannot process a mandatory attribute, as described in [RFC 8907 Section 6.1](https://datatracker.ietf.org/doc/html/rfc8907#section-6.1).
+
 ## Accounting Status Codes
 
 | Status | Constant | Description |
 |--------|----------|-------------|
 | SUCCESS | `AcctStatusSuccess` | Record accepted |
 | ERROR | `AcctStatusError` | Server error |
-| FOLLOW | `AcctStatusFollow` | Follow to another server |
+| FOLLOW | `AcctStatusFollow` | Client returns the reply without automatic redirection |
 
 ### Accounting Flags
 
@@ -324,20 +323,22 @@ Check the type of accounting record:
 
 ```go
 func (h *myHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctRequestContext) *gotacacs.AcctReply {
-    if req.Request.IsStart() {
+    if req.Request.IsWatchdog() {
+        // Periodic update; START is also set when arguments are updated.
+        h.recordWatchdog(req)
+    } else if req.Request.IsStart() {
         // Session starting
         h.recordSessionStart(req)
     } else if req.Request.IsStop() {
         // Session ending
         h.recordSessionStop(req)
-    } else if req.Request.IsWatchdog() {
-        // Periodic update
-        h.recordWatchdog(req)
     }
 
     return &gotacacs.AcctReply{Status: gotacacs.AcctStatusSuccess}
 }
 ```
+
+Check WATCHDOG before START because an update with arguments sets both flags. For WATCHDOG without START, ignore all arguments. Return `AcctStatusError` for invalid combinations, including START with STOP or WATCHDOG with STOP ([RFC 8907 Section 7.2](https://datatracker.ietf.org/doc/html/rfc8907#section-7.2)).
 
 ## Per-Client Secret Provider
 
@@ -412,6 +413,8 @@ During secret rotation, the server needs to accept both old and new secrets simu
 
 The secret is resolved on the first packet of a connection and reused for the entire connection lifetime, including single-connect mode with multiple sessions.
 
+Each candidate is tried until the deobfuscated body passes packet parsing. All parse failures, including ordinary length mismatches, advance to the next candidate. This validates packet framing; obfuscation does not authenticate the peer cryptographically.
+
 ```go
 secrets := map[string][]string{
     "10.0.0.1": {"newsecret", "oldsecret"},
@@ -440,7 +443,7 @@ When `Attempts` is 0 or 1, the server uses the single-secret fast path with no b
 
 ### TLS Client Certificate Access
 
-On TLS connections, `SecretRequest.TLSState` provides access to the client certificate. Use this to extract the CN or other certificate fields and pass them to handlers via `UserData`:
+On TLS connections, `SecretRequest.TLSState` provides access to the client certificate. This example passes the CN to handlers as logging metadata; identity verification belongs in the TLS configuration and uses the configured certificate identities, including SAN DNS names or IP addresses:
 
 ```go
 secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotacacs.SecretRequest) gotacacs.SecretResponse {
@@ -462,32 +465,11 @@ secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotaca
 ## TLS Configuration (RFC 9887)
 
 When using TLS, the shared secret is not needed as TLS provides encryption.
-The default TLS port for TACACS+ is 300 per RFC 9887. `ListenTLS` enforces TLS 1.3.
+The default TLS port is 300. `ListenTLS` clones the configuration and sets both `MinVersion` and `MaxVersion` to TLS 1.3. The configured server read timeout also bounds the TLS handshake.
 
-### Server with TLS
+### Mutual Certificate Authentication
 
-```go
-cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
-if err != nil {
-    log.Fatal(err)
-}
-
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{cert},
-}
-
-ln, err := gotacacs.ListenTLS(":300", tlsConfig)
-if err != nil {
-    log.Fatal(err)
-}
-
-server := gotacacs.NewServer(
-    gotacacs.WithServerListener(ln),
-    gotacacs.WithHandler(handler),
-)
-```
-
-### TLS with Client Certificate Verification
+[RFC 9887 Section 3](https://www.rfc-editor.org/rfc/rfc9887.html#section-3) requires mutual authentication. Require a client certificate and verify it against trusted client CAs:
 
 ```go
 caCert, err := os.ReadFile("ca.crt")
@@ -496,7 +478,9 @@ if err != nil {
 }
 
 caCertPool := x509.NewCertPool()
-caCertPool.AppendCertsFromPEM(caCert)
+if !caCertPool.AppendCertsFromPEM(caCert) {
+    log.Fatal("CA file contains no certificates")
+}
 
 cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
 if err != nil {
@@ -511,7 +495,17 @@ tlsConfig := &tls.Config{
 }
 
 ln, err := gotacacs.ListenTLS(":300", tlsConfig)
+if err != nil {
+    log.Fatal(err)
+}
+
+server := gotacacs.NewServer(
+    gotacacs.WithServerListener(ln),
+    gotacacs.WithHandler(handler),
+)
 ```
+
+Configure `tls.Config.VerifyConnection` for the required certificate revocation checks and the deployment's permitted client identities. Go's [default certificate verifier](https://pkg.go.dev/crypto/x509#Certificate.Verify) does not check revocation. The callback also runs on resumed connections. Requiring a trusted certificate alone does not enforce which client SAN identities may access the service.
 
 ## Server Lifecycle
 
@@ -539,27 +533,53 @@ if addr != nil {
 
 ### Graceful Shutdown
 
+Wait for `Shutdown` to finish after `Serve` returns so active handlers have time to exit:
+
 ```go
 // Handle shutdown signals
-sigChan := make(chan os.Signal, 1)
-signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+defer stop()
 
+shutdownDone := make(chan error, 1)
 go func() {
-    <-sigChan
+    <-signalCtx.Done()
     log.Println("Shutting down server...")
 
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
 
-    if err := server.Shutdown(ctx); err != nil {
-        log.Printf("Shutdown error: %v", err)
-    }
+    shutdownDone <- server.Shutdown(ctx)
 }()
 
 if err := server.Serve(); err != nil {
     log.Printf("Server stopped: %v", err)
 }
+stop() // Also request shutdown if Serve exited before a signal arrived.
+if err := <-shutdownDone; err != nil {
+    log.Printf("Shutdown error: %v", err)
+}
 ```
+
+Handler contexts are canceled when shutdown begins. If the shutdown context expires, active connections are closed and `Shutdown` returns the context error. Handlers that ignore cancellation may still be running; another `Shutdown` call waits for the same shutdown to complete.
+
+### Serving a Caller-Supplied Connection
+
+`ServeConn` accepts an existing `net.Conn` and runs the same packet handling, timeouts, hooks, secret rotation, and session tracking as `Serve`. It needs no listener and blocks until the connection ends:
+
+```go
+server := gotacacs.NewServer(
+    gotacacs.WithServerSecret("sharedsecret"),
+    gotacacs.WithHandler(handler),
+)
+
+if err := server.ServeConn(conn); err != nil {
+    log.Printf("Connection ended: %v", err)
+}
+```
+
+Once accepted for serving, the connection is closed by the server on exit. A connection rejected during shutdown remains the caller's responsibility. `Shutdown` also applies to active `ServeConn` calls. Connection metadata comes from `conn.RemoteAddr()` and `conn.LocalAddr()`; adapters must report the actual device addresses when those are used for secret lookup.
+
+For raw forwarding, `ReadRawPacket(r, maxBodyLength)` returns the original header and body bytes after header and size validation. `WriteRawPacket(w, header, body)` checks the declared body length and handles partial writes. These helpers operate on `io.Reader` and `io.Writer` and leave obfuscation and TLS flag policy to the endpoints.
 
 ## Function-Based Handlers
 
@@ -607,7 +627,7 @@ type SessionInfo struct {
     LocalAddr  net.Addr          // Server address
     UserData   map[string]string // Custom data from SecretProvider
     TLSState   *tls.ConnectionState // TLS state (nil for non-TLS)
-    PacketType uint8             // Packet type (authen, author, acct)
+    PacketType PacketType        // Packet type (authen, author, acct)
     State      SessionState      // Current session state
     StartedAt  time.Time         // When the session was created
 }
@@ -616,6 +636,8 @@ type SessionInfo struct {
 `TrackingID` is a monotonic counter unique across all connections. Use it for `KickSession()`. `SessionID` is the TACACS+ session ID chosen by the NAS — it is only unique per connection.
 
 ### Listing Active Sessions
+
+Each snapshot includes a separate `UserData` map. Treat shared `TLSState` and address metadata as read-only.
 
 ```go
 sessions := server.Sessions()
@@ -693,18 +715,15 @@ type Middleware func(next Handler) Handler
 
 ### MiddlewareHandler
 
-Embed `MiddlewareHandler` to delegate all methods to the next handler by default. Override only the methods you need:
+Embed `MiddlewareHandler` to delegate all methods to the next handler by default. This example logs authentication requests using the standard library:
 
 ```go
-type rateLimitMiddleware struct {
+type loggingMiddleware struct {
     gotacacs.MiddlewareHandler
-    limiter *rate.Limiter
 }
 
-func (m *rateLimitMiddleware) HandleAuthenStart(ctx context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
-    if !m.limiter.Allow() {
-        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusError, ServerMsg: []byte("rate limited")}
-    }
+func (m *loggingMiddleware) HandleAuthenStart(ctx context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    log.Printf("Authentication request from %s for %q", req.RemoteAddr, req.Start.User)
     return m.Next.HandleAuthenStart(ctx, req)
 }
 ```
@@ -718,9 +737,8 @@ server := gotacacs.NewServer(
     gotacacs.WithHandler(handler),
     gotacacs.WithMiddleware(
         func(next gotacacs.Handler) gotacacs.Handler {
-            return &rateLimitMiddleware{
+            return &loggingMiddleware{
                 MiddlewareHandler: gotacacs.MiddlewareHandler{Next: next},
-                limiter:           rate.NewLimiter(100, 10),
             }
         },
     ),
@@ -743,16 +761,9 @@ defer ln.Close()
 
 ### TLS Listener
 
+Use the mutually authenticated `tlsConfig` from [TLS Configuration](#tls-configuration-rfc-9887):
+
 ```go
-cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
-if err != nil {
-    log.Fatal(err)
-}
-
-tlsConfig := &tls.Config{
-    Certificates: []tls.Certificate{cert},
-}
-
 ln, err := gotacacs.ListenTLS(":300", tlsConfig)
 if err != nil {
     log.Fatal(err)
@@ -810,9 +821,11 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
 }
 ```
 
+If a handler reply cannot be marshaled (for example, a message exceeds its length field), the server sends the matching protocol ERROR response and ends the session. ABORT is the exception: the handler's response is ignored and no reply is sent.
+
 ## Best Practices
 
-1. **Use SecretProvider**: Implement per-client secrets for production deployments.
+1. **Use SecretProvider for TCP**: Configure per-client shared secrets when using the non-TLS transport. TLS connections use certificate authentication instead of obfuscation secrets.
 
 2. **Log with UserData**: Include UserData in logs for client identification.
 

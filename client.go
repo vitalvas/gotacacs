@@ -25,10 +25,12 @@ type Client struct {
 	conn    net.Conn
 	session *Session
 
-	timeout       time.Duration
-	singleConnect bool
-	maxBodyLength uint32
-	tlsMode       bool // RFC 9887: when true, use unencrypted flag and skip obfuscation
+	timeout                 time.Duration
+	singleConnect           bool
+	singleConnectNegotiated bool
+	singleConnectAccepted   bool
+	maxBodyLength           uint32
+	tlsMode                 bool // RFC 9887: when true, use unencrypted flag and skip obfuscation
 }
 
 // ClientOption is a function that configures a Client.
@@ -41,7 +43,8 @@ func WithAddress(address string) ClientOption {
 	}
 }
 
-// WithTimeout sets the connection and operation timeout.
+// WithTimeout sets the built-in dialer timeout and timeout for each network
+// read/write. Zero disables this timeout; context deadlines still apply.
 func WithTimeout(timeout time.Duration) ClientOption {
 	return func(c *Client) {
 		c.timeout = timeout
@@ -65,14 +68,13 @@ func WithSecretBytes(secret []byte) ClientOption {
 	}
 }
 
-// WithTLSConfig sets the TLS 1.3 configuration for RFC 9887 compliant connections.
+// WithTLSConfig sets the TLS configuration for TACACS+ over TLS.
 // When using TLS mode, the unencrypted flag is automatically set and
 // packet obfuscation is disabled since TLS provides encryption.
-// This function enforces TLS 1.3 as required by RFC 9887.
+// This function enforces a minimum of TLS 1.3 as required by RFC 9887.
 // If config is nil, a default TLS 1.3 configuration is used.
-// Note: if using WithTimeout, specify it before WithTLSConfig to ensure the
-// timeout is applied to the TLS dialer. The constructor corrects this for
-// built-in dialers, but custom dialers set via WithDialer are not updated.
+// Built-in dialer timeouts are applied after all options, regardless of order.
+// A custom dialer supplied after this option must return a TLS connection.
 func WithTLSConfig(config *tls.Config) ClientOption {
 	return func(c *Client) {
 		var cfg *tls.Config
@@ -157,6 +159,9 @@ func (c *Client) Connect(ctx context.Context) error {
 // connectLocked establishes a connection without acquiring the lock.
 // The caller must hold c.mu.
 func (c *Client) connectLocked(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.conn != nil {
 		return nil // Already connected
 	}
@@ -165,9 +170,32 @@ func (c *Client) connectLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", c.address, err)
 	}
+	if c.tlsMode && !IsTLSConn(conn) {
+		_ = conn.Close()
+		return fmt.Errorf("%w: TLS mode requires a TLS connection", ErrInvalidPacket)
+	}
 
 	c.conn = conn
+	c.singleConnectNegotiated = false
+	c.singleConnectAccepted = false
 	return nil
+}
+
+// watchContext interrupts in-flight I/O when a context without a deadline is
+// cancelled. The caller holds c.mu until the returned cleanup has finished.
+func (c *Client) watchContext(ctx context.Context) func() {
+	conn := c.conn
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(done)
+	})
+	return func() {
+		if !stop() {
+			<-done
+			c.closeConnection()
+		}
+	}
 }
 
 // Close closes the connection to the server.
@@ -246,10 +274,8 @@ func (c *Client) sendPacket(ctx context.Context, header *Header, body []byte) er
 	}
 
 	// Set deadline for write (respects both timeout and context deadline)
-	if deadline := c.effectiveDeadline(ctx); !deadline.IsZero() {
-		if err := c.conn.SetWriteDeadline(deadline); err != nil {
-			return fmt.Errorf("failed to set write deadline: %w", err)
-		}
+	if err := c.conn.SetWriteDeadline(c.effectiveDeadline(ctx)); err != nil {
+		return fmt.Errorf("failed to set write deadline: %w", err)
 	}
 
 	// Write header and body using writeAll to handle partial writes
@@ -269,10 +295,8 @@ func (c *Client) sendPacket(ctx context.Context, header *Header, body []byte) er
 // recvPacket receives a packet from the server with deobfuscation.
 func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
 	// Set deadline for read (respects both timeout and context deadline)
-	if deadline := c.effectiveDeadline(ctx); !deadline.IsZero() {
-		if err := c.conn.SetReadDeadline(deadline); err != nil {
-			return nil, nil, fmt.Errorf("failed to set read deadline: %w", err)
-		}
+	if err := c.conn.SetReadDeadline(c.effectiveDeadline(ctx)); err != nil {
+		return nil, nil, fmt.Errorf("failed to set read deadline: %w", err)
 	}
 
 	// Read header
@@ -374,6 +398,7 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	if err := c.connectLocked(ctx); err != nil {
 		return nil, err
 	}
+	defer c.watchContext(ctx)()
 
 	// Create new session
 	session, err := c.newSession()
@@ -400,6 +425,7 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 
 	// Create header
 	header := NewHeader(PacketTypeAuthen, session.ID())
+	header.Version = MajorVersion<<4 | MinorVersionOne
 	seqNo, err := session.NextSeqNo()
 	if err != nil {
 		return nil, err
@@ -442,7 +468,7 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	}
 
 	// RFC 8907: Check if server agreed to single-connect mode
-	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+	singleConnectOK := c.acceptSingleConnect(respHeader)
 
 	// Update session state based on reply
 	switch reply.Status {
@@ -482,6 +508,8 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 
 // AuthenticateASCII performs ASCII authentication with interactive prompts.
 // The promptHandler is called for each GETDATA/GETUSER/GETPASS request.
+// A missing callback when input is requested returns ErrInvalidPacket.
+// At most 20 prompt responses are allowed; a further prompt returns ErrMaxPrompts.
 func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptHandler func(prompt string, noEcho bool) (string, error)) (*AuthenReply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -490,6 +518,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 	if err := c.connectLocked(ctx); err != nil {
 		return nil, err
 	}
+	defer c.watchContext(ctx)()
 
 	// Create new session
 	session, err := c.newSession()
@@ -528,11 +557,6 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 	// Authentication loop with iteration limit to prevent malicious servers
 	// from keeping the client in an infinite prompt loop.
 	for iteration := 0; ; iteration++ {
-		if iteration >= maxASCIIPrompts {
-			c.closeConnection()
-			return nil, fmt.Errorf("%w: %d", ErrMaxPrompts, maxASCIIPrompts)
-		}
-
 		// Receive reply
 		respHeader, respBody, err := c.recvPacket(ctx)
 		if err != nil {
@@ -564,7 +588,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 		session.UpdateSeqNo(respHeader.SeqNo)
 
 		// RFC 8907: Check if server agreed to single-connect mode
-		singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+		singleConnectOK := c.acceptSingleConnect(respHeader)
 
 		// Check if authentication is complete
 		if reply.IsPass() {
@@ -602,6 +626,14 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 
 		// Handle prompts
 		if reply.NeedsInput() {
+			if iteration >= maxASCIIPrompts {
+				c.closeConnection()
+				return nil, fmt.Errorf("%w: %d", ErrMaxPrompts, maxASCIIPrompts)
+			}
+			if promptHandler == nil {
+				c.closeConnection()
+				return nil, fmt.Errorf("%w: prompt handler is nil", ErrInvalidPacket)
+			}
 			prompt := string(reply.ServerMsg)
 			response, err := promptHandler(prompt, reply.NoEcho())
 			if err != nil {
@@ -621,6 +653,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 			cont := &AuthenContinue{UserMsg: []byte(response)}
 			contBody, err := cont.MarshalBinary()
 			if err != nil {
+				c.closeConnection()
 				return nil, fmt.Errorf("failed to marshal CONTINUE: %w", err)
 			}
 
@@ -651,6 +684,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	if err := c.connectLocked(ctx); err != nil {
 		return nil, err
 	}
+	defer c.watchContext(ctx)()
 
 	// Create new session
 	session, err := c.newSession()
@@ -732,7 +766,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect
-	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+	singleConnectOK := c.acceptSingleConnect(respHeader)
 	if !singleConnectOK {
 		c.closeConnection()
 	}
@@ -749,6 +783,7 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 	if err := c.connectLocked(ctx); err != nil {
 		return nil, err
 	}
+	defer c.watchContext(ctx)()
 
 	// Create new session
 	session, err := c.newSession()
@@ -831,7 +866,7 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect
-	singleConnectOK := c.singleConnect && serverAcceptedSingleConnect(respHeader)
+	singleConnectOK := c.acceptSingleConnect(respHeader)
 	if !singleConnectOK {
 		c.closeConnection()
 	}
@@ -843,6 +878,16 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 // Per RFC 8907 Section 4.3, both sides must agree on single-connect mode.
 func serverAcceptedSingleConnect(respHeader *Header) bool {
 	return respHeader.Flags&FlagSingleConnect != 0
+}
+
+// acceptSingleConnect remembers the negotiation from the first reply on this
+// connection. RFC 8907 Section 4.3 requires ignoring subsequent flag changes.
+func (c *Client) acceptSingleConnect(header *Header) bool {
+	if !c.singleConnectNegotiated {
+		c.singleConnectAccepted = c.singleConnect && serverAcceptedSingleConnect(header)
+		c.singleConnectNegotiated = true
+	}
+	return c.singleConnectAccepted
 }
 
 // closeConnection closes the connection without locking.

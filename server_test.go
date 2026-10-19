@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"reflect"
@@ -5253,6 +5254,236 @@ func TestResolveSecretNonBadSecretError(t *testing.T) {
 			t.Errorf("got %v, want %v", rotationAttempts, []int{0})
 		}
 	})
+}
+
+func TestSecretRotationRetriesLengthErrors(t *testing.T) {
+	correct := []byte("correct secret")
+	wrong := []byte("old secret")
+	server := NewServer(WithSecretProvider(SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+		if req.Attempt != 1 {
+			t.Errorf("unexpected attempt %d", req.Attempt)
+		}
+		return SecretResponse{Secret: correct}
+	})))
+	start := &AuthenStart{
+		Action:     AuthenActionLogin,
+		AuthenType: AuthenTypePAP,
+		Service:    AuthenServiceLogin,
+		User:       bytes.Repeat([]byte("u"), 255),
+		Port:       bytes.Repeat([]byte("p"), 100),
+		Data:       bytes.Repeat([]byte("x"), 255),
+	}
+	body, err := start.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := &Header{Version: 0xc1, Type: PacketTypeAuthen, SeqNo: 1, SessionID: 42, Length: uint32(len(body))}
+	raw := Obfuscate(header, correct, body)
+	if _, err := server.deobfuscateAndValidate(header, raw, wrong, false); err == nil || errors.Is(err, ErrBadSecret) {
+		t.Fatalf("fixture must produce a length error outside the bad-secret heuristic: %v", err)
+	}
+	cs := &connState{secret: wrong, totalAttempts: 2}
+	got := server.resolveSecret(context.Background(), header, raw, cs)
+	if !bytes.Equal(got, body) || !bytes.Equal(cs.secret, correct) {
+		t.Error("rotation stopped before trying the correct secret")
+	}
+}
+
+func TestServerSingleConnectNegotiationIsFixed(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(fmt.Sprint("accepted=", accepted), func(t *testing.T) {
+			server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+				onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+					return &AuthenReply{Status: AuthenStatusGetPass}
+				},
+			}))
+			peer, conn := net.Pipe()
+			done := make(chan error, 1)
+			go func() { done <- server.ServeConn(peer) }()
+			defer func() {
+				conn.Close()
+				peer.Close()
+				<-done
+			}()
+			exchange := func(header *Header, packet Packet) *Header {
+				t.Helper()
+				conn.SetDeadline(time.Now().Add(time.Second))
+				body, err := packet.MarshalBinary()
+				if err != nil {
+					t.Fatal(err)
+				}
+				header.Length = uint32(len(body))
+				if err := server.writePacket(conn, header, body, nil, false); err != nil {
+					t.Fatal(err)
+				}
+				reply, _, err := server.readPacket(conn, nil, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return reply
+			}
+			header := NewHeader(PacketTypeAuthen, 42)
+			header.SetSingleConnect(accepted)
+			exchange(header, NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user"))
+			header.SeqNo = 3
+			header.SetSingleConnect(!accepted)
+			if reply := exchange(header, &AuthenContinue{UserMsg: []byte("pass")}); reply.IsSingleConnect() != accepted {
+				t.Error("later flag changed the negotiated mode")
+			}
+			if accepted {
+				header = NewHeader(PacketTypeAcct, 43)
+				exchange(header, &AcctRequest{Flags: AcctFlagStart})
+			} else {
+				select {
+				case err := <-done:
+					done <- err
+				case <-time.After(100 * time.Millisecond):
+					t.Error("connection retained without single-connect negotiation")
+				}
+			}
+		})
+	}
+}
+
+func TestServerAbortHasNoReply(t *testing.T) {
+	var aborted atomic.Bool
+	server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+		onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusGetPass}
+		},
+		onContinue: func(_ context.Context, req *AuthenContinueRequest) *AuthenReply {
+			aborted.Store(req.Continue.IsAbort())
+			return &AuthenReply{Status: AuthenStatusPass}
+		},
+	}))
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	header.SetSingleConnect(true)
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.readPacket(conn, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	header.SeqNo = 3
+	body, _ = (&AuthenContinue{Flags: AuthenContinueFlagAbort}).MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, _, err := server.readPacket(conn, nil, false); err == nil {
+		t.Fatal("server replied to an aborted session")
+	} else if timeout, ok := errors.AsType[net.Error](err); !ok || !timeout.Timeout() {
+		t.Fatalf("single-connect connection closed after abort: %v", err)
+	}
+	if !aborted.Load() || len(server.Sessions()) != 0 {
+		t.Error("abort was not delivered to the handler and cleaned up")
+	}
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header = NewHeader(PacketTypeAcct, 43)
+	body, _ = (&AcctRequest{Flags: AcctFlagStart}).MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.readPacket(conn, nil, false); err != nil {
+		t.Fatalf("could not start another session after abort: %v", err)
+	}
+}
+
+func TestServerTLSHandshakeReadTimeout(t *testing.T) {
+	server := NewServer(WithServerReadTimeout(20 * time.Millisecond))
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(tls.Server(peer, &tls.Config{})) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("stalled TLS handshake succeeded")
+		}
+		done <- err
+	case <-time.After(100 * time.Millisecond):
+		t.Error("TLS handshake ignored the configured read timeout")
+	}
+}
+
+func TestServerReplyMarshalFailures(t *testing.T) {
+	oversized := make([]byte, 65536)
+	server := NewServer(
+		WithAuthenticationHandler(&multiStepHandler{
+			onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusPass, ServerMsg: oversized}
+			},
+			onContinue: func(context.Context, *AuthenContinueRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusPass, Data: oversized}
+			},
+		}),
+		WithAuthorizationHandler(AuthorHandlerFunc(func(context.Context, *AuthorRequestContext) *AuthorResponse {
+			return &AuthorResponse{Status: AuthorStatusPassAdd, ServerMsg: oversized}
+		})),
+		WithAccountingHandler(AcctHandlerFunc(func(context.Context, *AcctRequestContext) *AcctReply {
+			return &AcctReply{Status: AcctStatusSuccess, Data: oversized}
+		})),
+	)
+	cases := []struct {
+		name   string
+		header Header
+		packet Packet
+	}{
+		{name: "START", header: Header{Type: PacketTypeAuthen, SeqNo: 1}, packet: &AuthenStart{}},
+		{name: "CONTINUE", header: Header{Type: PacketTypeAuthen, SeqNo: 3}, packet: &AuthenContinue{}},
+		{name: "authorization", header: Header{Type: PacketTypeAuthor, SeqNo: 1}, packet: &AuthorRequest{}},
+		{name: "accounting", header: Header{Type: PacketTypeAcct, SeqNo: 1}, packet: &AcctRequest{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := tc.packet.MarshalBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reply []byte
+			var state SessionState
+			switch tc.header.Type {
+			case PacketTypeAuthen:
+				reply, _, state = server.handleAuthenPacketWithState(context.Background(), &tc.header, body, &connState{})
+				resp := &AuthenReply{}
+				if err := resp.UnmarshalBinary(reply); err != nil || !resp.IsError() {
+					t.Errorf("expected authentication ERROR, got %v: %v", resp, err)
+				}
+			case PacketTypeAuthor:
+				reply, _, state = server.handleAuthorPacket(context.Background(), &tc.header, body, &connState{})
+				resp := &AuthorResponse{}
+				if err := resp.UnmarshalBinary(reply); err != nil || !resp.IsError() {
+					t.Errorf("expected authorization ERROR, got %v: %v", resp, err)
+				}
+			case PacketTypeAcct:
+				reply, _, state = server.handleAcctPacket(context.Background(), &tc.header, body, &connState{})
+				resp := &AcctReply{}
+				if err := resp.UnmarshalBinary(reply); err != nil || !resp.IsError() {
+					t.Errorf("expected accounting ERROR, got %v: %v", resp, err)
+				}
+			}
+			if state != SessionStateError {
+				t.Errorf("session state = %v, want ERROR", state)
+			}
+		})
+	}
 }
 
 func TestSequenceOverflowCleanup(t *testing.T) {

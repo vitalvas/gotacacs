@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"reflect"
@@ -1422,9 +1423,9 @@ func TestClientErrorPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("RFC 9887 tlsMode on non-TLS connection uses obfuscation", func(t *testing.T) {
-		// This test verifies that even if tlsMode is set, a non-TLS connection
-		// still uses obfuscation (security fix for bug #2)
+	t.Run("sendPacket obfuscates non-TLS connections regardless of tlsMode", func(t *testing.T) {
+		// Exercise the low-level safeguard against sending unobfuscated data
+		// even if the internal mode flag is changed on an existing connection.
 		secret := []byte("testsecret")
 
 		handler := func(conn net.Conn) {
@@ -1472,10 +1473,11 @@ func TestClientErrorPaths(t *testing.T) {
 		server := newMockServer(t, handler)
 		defer server.Close()
 
-		// Create client with tlsMode enabled but using TCP connection
-		// The client should still use obfuscation because connection is not TLS
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
-		client.tlsMode = true // This should be ignored for non-TLS connections
+		if err := client.Connect(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		client.tlsMode = true
 
 		reply, err := client.Authenticate(context.Background(), "user", "pass")
 		if err != nil {
@@ -2478,14 +2480,14 @@ func TestClientSendPacketWriteDeadlineError(t *testing.T) {
 		}
 	})
 
-	t.Run("writeAll header error without timeout", func(t *testing.T) {
+	t.Run("deadline reset error without timeout", func(t *testing.T) {
 		serverConn, clientConn := net.Pipe()
 		serverConn.Close()
 
 		client := NewClient(
 			WithAddress("localhost:49"),
 			WithSecret("testsecret"),
-			WithTimeout(0), // No timeout, so SetWriteDeadline is skipped
+			WithTimeout(0), // Clear any deadline from a previous operation.
 		)
 		client.conn = clientConn
 
@@ -2496,8 +2498,8 @@ func TestClientSendPacketWriteDeadlineError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected an error")
 		}
-		if !strings.Contains(err.Error(), "failed to write header") {
-			t.Errorf("error %q does not contain %q", err.Error(), "failed to write header")
+		if !strings.Contains(err.Error(), "failed to set write deadline") {
+			t.Errorf("error %q does not contain %q", err.Error(), "failed to set write deadline")
 		}
 		clientConn.Close()
 	})
@@ -2734,4 +2736,223 @@ func TestClientContextCancellation(t *testing.T) {
 			t.Fatal("expected an error")
 		}
 	})
+}
+
+func TestClientPAPVersion(t *testing.T) {
+	var version Version
+	server := NewServer(WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+		version = req.Header.Version
+		return &AuthenReply{Status: AuthenStatusPass}
+	})))
+	client, cleanup := newServeConnPair(t, server, "")
+	defer cleanup()
+	if _, err := client.Authenticate(context.Background(), "user", "pass"); err != nil {
+		t.Fatal(err)
+	}
+	if version != MajorVersion<<4|MinorVersionOne {
+		t.Errorf("PAP version = %#x, want 0xc1", version)
+	}
+}
+
+func TestClientTLSModeRejectsPlainDialer(t *testing.T) {
+	peer, conn := net.Pipe()
+	defer peer.Close()
+	defer conn.Close()
+	client := NewClient(WithTLSConfig(nil), WithDialer(&pipeDialer{conn: conn}))
+	defer client.Close()
+	if err := client.Connect(context.Background()); err == nil {
+		t.Error("TLS-configured client accepted a plaintext connection")
+	}
+	if client.IsConnected() {
+		t.Error("plaintext connection retained")
+	}
+}
+
+func TestClientCancelWithoutDeadline(t *testing.T) {
+	operations := map[string]func(*Client, context.Context) error{
+		"PAP": func(c *Client, ctx context.Context) error {
+			_, err := c.Authenticate(ctx, "user", "pass")
+			return err
+		},
+		"ASCII": func(c *Client, ctx context.Context) error {
+			_, err := c.AuthenticateASCII(ctx, "user", func(string, bool) (string, error) { return "pass", nil })
+			return err
+		},
+		"authorization": func(c *Client, ctx context.Context) error {
+			_, err := c.Authorize(ctx, "user", nil)
+			return err
+		},
+		"accounting": func(c *Client, ctx context.Context) error {
+			_, err := c.Accounting(ctx, AcctFlagStart, "user", nil)
+			return err
+		},
+	}
+	for name, operation := range operations {
+		t.Run(name, func(t *testing.T) {
+			peer, conn := net.Pipe()
+			defer peer.Close()
+			defer conn.Close()
+			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithTimeout(0))
+			defer client.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- operation(client, ctx) }()
+			// Cancel only after the request has been sent and the client is
+			// waiting for a reply on an already established connection.
+			if _, _, err := ReadRawPacket(peer, DefaultMaxBodyLength); err != nil {
+				t.Fatal(err)
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Error("cancelled operation succeeded")
+				}
+			case <-time.After(100 * time.Millisecond):
+				t.Error("cancellation did not interrupt the read")
+				peer.Close()
+				<-done
+			}
+			if client.IsConnected() {
+				t.Error("cancelled connection retained for reuse")
+			}
+		})
+	}
+}
+
+func TestClientASCIIInputFailures(t *testing.T) {
+	for _, oversized := range []bool{false, true} {
+		t.Run(fmt.Sprint("oversized=", oversized), func(t *testing.T) {
+			server := NewServer(WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusGetPass}
+			})))
+			client, cleanup := newServeConnPair(t, server, "")
+			defer cleanup()
+			var prompt func(string, bool) (string, error)
+			if oversized {
+				prompt = func(string, bool) (string, error) { return strings.Repeat("x", 65536), nil }
+			}
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Errorf("prompt caused panic: %v", recovered)
+				}
+			}()
+			if _, err := client.AuthenticateASCII(context.Background(), "user", prompt); err == nil {
+				t.Error("invalid prompt input succeeded")
+			}
+			if client.IsConnected() {
+				t.Error("unfinished authentication retained for reuse")
+			}
+		})
+	}
+}
+
+func TestClientASCIIPromptBoundary(t *testing.T) {
+	server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+		onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusGetPass}
+		},
+		onContinue: func(_ context.Context, req *AuthenContinueRequest) *AuthenReply {
+			if req.Header.SeqNo == 2*maxASCIIPrompts+1 {
+				return &AuthenReply{Status: AuthenStatusPass}
+			}
+			return &AuthenReply{Status: AuthenStatusGetPass}
+		},
+	}))
+	client, cleanup := newServeConnPair(t, server, "")
+	defer cleanup()
+	prompts := 0
+	reply, err := client.AuthenticateASCII(context.Background(), "user", func(string, bool) (string, error) {
+		prompts++
+		return "pass", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reply.IsPass() || prompts != maxASCIIPrompts {
+		t.Errorf("reply = %v, prompts = %d", reply, prompts)
+	}
+}
+
+func TestClientASCIISingleConnectNegotiation(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(fmt.Sprint("accepted=", accepted), func(t *testing.T) {
+			peer, conn := net.Pipe()
+			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithSingleConnect(true))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				defer peer.Close()
+				server := NewServer()
+				for i := range 2 {
+					header, _, err := server.readPacket(peer, nil, false)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					header.SeqNo++
+					header.SetSingleConnect(accepted != (i == 1))
+					status := AuthenStatusGetPass
+					if i == 1 {
+						status = AuthenStatusPass
+					}
+					body, _ := (&AuthenReply{Status: status}).MarshalBinary()
+					header.Length = uint32(len(body))
+					if err := server.writePacket(peer, header, body, nil, false); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+			}()
+			defer func() {
+				client.Close()
+				peer.Close()
+				<-done
+			}()
+			if _, err := client.AuthenticateASCII(context.Background(), "user", func(string, bool) (string, error) { return "pass", nil }); err != nil {
+				t.Fatal(err)
+			}
+			if client.IsConnected() != accepted {
+				t.Errorf("connection retention must follow the first reply: accepted=%v", accepted)
+			}
+		})
+	}
+}
+
+func TestClientClearsExpiredDeadlines(t *testing.T) {
+	for _, reading := range []bool{false, true} {
+		t.Run(fmt.Sprint("reading=", reading), func(t *testing.T) {
+			peer, conn := net.Pipe()
+			client := NewClient(WithTimeout(0))
+			client.conn = conn
+			done := make(chan struct{})
+			header := NewHeader(PacketTypeAuthen, 42)
+			if reading {
+				conn.SetReadDeadline(time.Now().Add(-time.Second))
+			} else {
+				conn.SetWriteDeadline(time.Now().Add(-time.Second))
+			}
+			go func() {
+				defer close(done)
+				if reading {
+					_ = NewServer().writePacket(peer, header, nil, nil, false)
+				} else {
+					_, _, _ = ReadRawPacket(peer, DefaultMaxBodyLength)
+				}
+			}()
+			defer func() {
+				client.Close()
+				peer.Close()
+				<-done
+			}()
+			if reading {
+				if _, _, err := client.recvPacket(context.Background()); err != nil {
+					t.Error(err)
+				}
+			} else if err := client.sendPacket(context.Background(), header, nil); err != nil {
+				t.Error(err)
+			}
+		})
+	}
 }

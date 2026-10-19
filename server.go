@@ -319,7 +319,8 @@ func WithMiddleware(middlewares ...Middleware) ServerOption {
 	}
 }
 
-// WithServerReadTimeout sets the read timeout for client connections.
+// WithServerReadTimeout sets the packet read and TLS handshake timeout for
+// client connections. Zero disables this timeout.
 func WithServerReadTimeout(timeout time.Duration) ServerOption {
 	return func(s *Server) {
 		s.readTimeout = timeout
@@ -646,7 +647,8 @@ func (s *Server) Addr() net.Addr {
 }
 
 // Sessions returns a snapshot of all active sessions.
-// The returned SessionInfo values are deep copies safe for concurrent use.
+// Each result has its own UserData map. TLSState and addresses are shared
+// metadata and must be treated as read-only.
 func (s *Server) Sessions() []SessionInfo {
 	var sessions []SessionInfo
 	s.activeSessions.Range(func(_, value any) bool {
@@ -701,6 +703,11 @@ type connState struct {
 // completeTLSHandshake completes the TLS handshake and returns the connection state.
 func (s *Server) completeTLSHandshake(ctx context.Context, conn net.Conn) (*tls.ConnectionState, error) {
 	if hs, ok := conn.(interface{ HandshakeContext(context.Context) error }); ok {
+		if s.readTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, s.readTimeout)
+			defer cancel()
+		}
 		if err := hs.HandshakeContext(ctx); err != nil {
 			return nil, err
 		}
@@ -869,6 +876,8 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 
 	// Secret rotation: resolved after first packet when multiple secrets are available
 	secretResolved := false
+	firstPacket := true
+	var singleConnectFlag HeaderFlag
 
 	s.fireConnect(cs.remoteAddr, cs.localAddr, cs.tlsState)
 
@@ -918,6 +927,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			secretResolved = true
 		}
 
+		// RFC 8907 Section 4.3: negotiate only on the first exchange.
+		if firstPacket {
+			singleConnectFlag = header.Flags & FlagSingleConnect
+			firstPacket = false
+		}
+
 		// Get or create session (scoped to this connection for security)
 		session, exists := localSessions[header.SessionID]
 		if !exists {
@@ -928,9 +943,11 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 
 		// Check if session was kicked
 		if s.isSessionKicked(trackingIDs[header.SessionID]) {
-			s.sendKickedResponse(conn, header, cs.secret, cs.isTLS)
+			kickedHeader := *header
+			kickedHeader.Flags = singleConnectFlag
+			s.sendKickedResponse(conn, &kickedHeader, cs.secret, cs.isTLS)
 			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
-			if header.Flags&FlagSingleConnect == 0 {
+			if singleConnectFlag == 0 {
 				return nil
 			}
 			continue
@@ -965,15 +982,15 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			return fmt.Errorf("%w: unsupported packet type %d", ErrInvalidType, header.Type)
 		}
 
-		if respBody == nil {
-			return nil
-		}
-
-		// Set session state based on response (Complete for success, Error for failures)
-		if sessionState != SessionStateActive {
-			session.SetState(sessionState)
-		}
+		session.SetState(sessionState)
 		s.updateTrackedState(trackingIDs, header.SessionID, sessionState)
+		if respBody == nil {
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			if singleConnectFlag == 0 {
+				return nil
+			}
+			continue
+		}
 
 		// Get next sequence number
 		seqNo, err := session.NextSeqNo()
@@ -992,7 +1009,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			Version:   header.Version,
 			Type:      respType,
 			SeqNo:     seqNo,
-			Flags:     header.Flags & FlagSingleConnect,
+			Flags:     singleConnectFlag,
 			SessionID: header.SessionID,
 			Length:    uint32(len(respBody)),
 		}
@@ -1011,7 +1028,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
 
 			// Close connection if not single-connect mode
-			if header.Flags&FlagSingleConnect == 0 {
+			if singleConnectFlag == 0 {
 				return nil
 			}
 		}
@@ -1045,7 +1062,7 @@ func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []by
 		}
 
 		deobBody, validateErr := s.deobfuscateAndValidate(header, rawBody, attemptSecret, cs.isTLS)
-		if validateErr == nil || !errors.Is(validateErr, ErrBadSecret) {
+		if validateErr == nil {
 			cs.secret = attemptSecret
 			cs.userData = attemptUserData
 			return deobBody
@@ -1191,7 +1208,7 @@ func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header
 		case AuthenStatusFail, AuthenStatusError:
 			return respBody, respType, SessionStateError
 		default:
-			// PASS, FOLLOW, RESTART are terminal but successful completions
+			// PASS, FOLLOW, and RESTART end the exchange.
 			return respBody, respType, SessionStateComplete
 		}
 	}
@@ -1281,7 +1298,10 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 	if reply == nil {
 		return s.authenErrorResponse("handler returned nil response")
 	}
-	respBody, _ := reply.MarshalBinary()
+	respBody, err := reply.MarshalBinary()
+	if err != nil {
+		return s.authenErrorResponse("invalid handler response")
+	}
 	return respBody, PacketTypeAuthen
 }
 
@@ -1300,10 +1320,16 @@ func (s *Server) handleAuthenContinue(ctx context.Context, header *Header, body 
 		UserData:   copyUserData(cs.userData),
 	}
 	reply := s.handler.HandleAuthenContinue(ctx, req)
+	if cont.IsAbort() {
+		return nil, PacketTypeAuthen
+	}
 	if reply == nil {
 		return s.authenErrorResponse("handler returned nil response")
 	}
-	respBody, _ := reply.MarshalBinary()
+	respBody, err := reply.MarshalBinary()
+	if err != nil {
+		return s.authenErrorResponse("invalid handler response")
+	}
 	return respBody, PacketTypeAuthen
 }
 
@@ -1340,7 +1366,11 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 		respBody, respType := s.authorErrorResponse("handler returned nil response")
 		return respBody, respType, SessionStateError
 	}
-	respBody, _ := resp.MarshalBinary()
+	respBody, err := resp.MarshalBinary()
+	if err != nil {
+		errBody, respType := s.authorErrorResponse("invalid handler response")
+		return errBody, respType, SessionStateError
+	}
 
 	// Determine session state based on response status
 	state := SessionStateComplete
@@ -1383,7 +1413,11 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 		respBody, respType := s.acctErrorResponse("handler returned nil response")
 		return respBody, respType, SessionStateError
 	}
-	respBody, _ := resp.MarshalBinary()
+	respBody, err := resp.MarshalBinary()
+	if err != nil {
+		errBody, respType := s.acctErrorResponse("invalid handler response")
+		return errBody, respType, SessionStateError
+	}
 
 	// Determine session state based on response status
 	state := SessionStateComplete
