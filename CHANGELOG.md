@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/vitalvas/gotacacs/compare/v0.6.0...v0.6.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* client and server connection handling ([71310a0](https://github.com/vitalvas/gotacacs/commit/71310a008d59c25c155f5f9f6b6d0a02ca2e32c2))
+
 ## [0.6.0](https://github.com/vitalvas/gotacacs/compare/v0.5.0...v0.6.0) (2026-10-19)
 
 
