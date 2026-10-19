@@ -80,7 +80,10 @@
 //			req.Start.Service != gotacacs.AuthenServiceLogin {
 //			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
 //		}
-//		if string(req.Start.User) == "admin" && string(req.Start.Data) == "password" {
+//		// Demo only: real deployments store salted password hashes. Compare in
+//		// constant time so a reply cannot leak password-prefix timing.
+//		if string(req.Start.User) == "admin" &&
+//			subtle.ConstantTimeCompare(req.Start.Data, []byte("password")) == 1 {
 //			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
 //		}
 //		return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
@@ -122,6 +125,41 @@
 //	)
 //
 // The UserData map is available in all handler request contexts via req.UserData.
+//
+// # CHAP Authentication
+//
+// CHAP (RFC 8907 Section 5.4.2.3) is a single START / single REPLY exchange.
+// The client supplies the PPP id and challenge; AuthenticateCHAP computes the
+// MD5 response from the shared secret and sends it in the START data field. A
+// FAIL status returns the reply with ErrAuthenticationFailed:
+//
+//	challenge := make([]byte, 16) // SHOULD be >= 8 octets and unpredictable
+//	if _, err := rand.Read(challenge); err != nil {
+//		log.Fatal(err)
+//	}
+//	reply, err := client.AuthenticateCHAP(ctx, "username", id, []byte("sharedsecret"), challenge)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//
+// A server handler verifies a received CHAP START with VerifyCHAP, which
+// recomputes the response from the shared secret and compares it in constant
+// time:
+//
+//	func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+//		if req.Start.AuthenType == gotacacs.AuthenTypeCHAP {
+//			ok, err := gotacacs.VerifyCHAP(h.secretFor(string(req.Start.User)), req.Start.Data)
+//			if err != nil || !ok {
+//				return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+//			}
+//			return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
+//		}
+//		// ... other authen types
+//	}
+//
+// The helpers CHAPResponse, BuildCHAPData, ParseCHAPData, and NewCHAPStart are
+// exported for callers assembling the exchange manually. MS-CHAP and
+// MS-CHAPv2 are not implemented.
 //
 // # TLS Support (RFC 9887)
 //

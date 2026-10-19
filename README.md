@@ -8,13 +8,16 @@ Provides both client and server SDK interfaces for Authentication, Authorization
 
 - TACACS+ authentication, authorization, and accounting packet types (RFC 8907)
 - TLS 1.3 transport support (RFC 9887)
-- Client SDK with high-level API (PAP and ASCII interactive authentication)
+- Client SDK with high-level API (PAP, CHAP, and ASCII interactive authentication)
 - Server SDK with pluggable handler interfaces
 - TCP and TLS transport support
 - Body obfuscation (MD5-based pseudo-pad)
-- Single-connect mode for connection reuse
+- Single-connect mode for connection reuse, with server-side refusal
 - Per-client secret provider with custom user data
-- Argument helpers for TACACS+ `key=value` attributes
+- Argument helpers preserving the mandatory (`=`) and optional (`*`) separators
+- Username and text-field validation (RFC 8907 Section 3.7)
+- RFC conformance guards: mandatory shared secret, unencrypted-flag rejection,
+  accounting flag validation, and an authentication retry limit
 - Graceful server shutdown
 
 ## Requirements
@@ -100,7 +103,10 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
         req.Start.Service != gotacacs.AuthenServiceLogin {
         return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
     }
-    if string(req.Start.User) == "admin" && string(req.Start.Data) == "secret" {
+    // Demo only: real deployments store salted password hashes, not plaintext.
+    // Compare in constant time so a reply cannot leak password-prefix timing.
+    if string(req.Start.User) == "admin" &&
+        subtle.ConstantTimeCompare(req.Start.Data, []byte("secret")) == 1 {
         return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
     }
     return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}

@@ -186,7 +186,7 @@ A FAIL status returns the response together with `ErrAuthorizationDenied`.
 | `IsFail()` | Returns true if authorization denied |
 | `IsError()` | Returns true if server returned an error |
 | `Args()` | Returns server-provided arguments as string slice |
-| `ArgValues()` | Returns server-provided `key=value` arguments parsed by key |
+| `ArgValues()` | Returns server-provided arguments parsed by key (splits `key=value` and `key*value`; see the server guide for the lossless `ParseArgs` path) |
 
 ## Accounting
 

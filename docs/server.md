@@ -91,13 +91,14 @@ func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenReq
         return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
     }
     user := string(req.Start.User)
-    password := string(req.Start.Data)
 
     log.Printf("Authentication: user=%s from=%s userData=%v",
         user, req.RemoteAddr, req.UserData)
 
+    // Demo only: real deployments store salted password hashes. Compare in
+    // constant time so a reply cannot leak password-prefix timing.
     expectedPass, ok := h.users[user]
-    if !ok || password != expectedPass {
+    if !ok || subtle.ConstantTimeCompare(req.Start.Data, []byte(expectedPass)) != 1 {
         return &gotacacs.AuthenReply{
             Status:    gotacacs.AuthenStatusFail,
             ServerMsg: []byte("Invalid credentials"),
