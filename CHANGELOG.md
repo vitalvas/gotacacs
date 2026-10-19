@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/vitalvas/gotacacs/compare/v0.5.0...v0.6.0) (2026-10-19)
+
+
+### Features
+
+* add named types for protocol enum constants ([2023dca](https://github.com/vitalvas/gotacacs/commit/2023dca72cca4106fad85ada94c6ac80cc1f17c8))
+* move module to go.vitalvas.com and target Go 1.27 ([d3187de](https://github.com/vitalvas/gotacacs/commit/d3187de63bf4ca1cac01d437ddeb73a2eb01d419))
+
+
+### Bug Fixes
+
+* remove redundant type conversions in const tests ([5302928](https://github.com/vitalvas/gotacacs/commit/5302928182bdbcce7c5b029db18257668c7111d6))
+* remove testify in favor of stdlib testing ([fbbb5eb](https://github.com/vitalvas/gotacacs/commit/fbbb5eb68b636023c14790650e385791c0f27221))
+
 ## [0.5.0](https://github.com/vitalvas/gotacacs/compare/v0.4.0...v0.5.0) (2026-08-27)
 
 
