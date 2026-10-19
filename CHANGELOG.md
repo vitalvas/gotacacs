@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/vitalvas/gotacacs/compare/v0.6.1...v0.7.0) (2026-10-19)
+
+
+### Features
+
+* RFC 8907/9887 conformance, CHAP support, and username validation ([d8ceb85](https://github.com/vitalvas/gotacacs/commit/d8ceb8562046aaebb2929586d4c3b9cfa8037fe8))
+
+
+### Bug Fixes
+
+* use constant-time password compare in docs and examples ([055e848](https://github.com/vitalvas/gotacacs/commit/055e848dacf0f5a8d17ab25ef73bf1df038bd904))
+
 ## [0.6.1](https://github.com/vitalvas/gotacacs/compare/v0.6.0...v0.6.1) (2026-10-19)
 
 
