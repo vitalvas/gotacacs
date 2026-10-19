@@ -5,10 +5,10 @@ import (
 )
 
 func TestVersionConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(MajorVersion), 0x0c},
-		{uint8(MinorVersionDefault), 0x00},
-		{uint8(MinorVersionOne), 0x01},
+	for _, c := range []struct{ got, want Version }{
+		{MajorVersion, 0x0c},
+		{MinorVersionDefault, 0x00},
+		{MinorVersionOne, 0x01},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -17,10 +17,10 @@ func TestVersionConstants(t *testing.T) {
 }
 
 func TestPacketTypeConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(PacketTypeAuthen), 0x01},
-		{uint8(PacketTypeAuthor), 0x02},
-		{uint8(PacketTypeAcct), 0x03},
+	for _, c := range []struct{ got, want PacketType }{
+		{PacketTypeAuthen, 0x01},
+		{PacketTypeAuthor, 0x02},
+		{PacketTypeAcct, 0x03},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -29,9 +29,9 @@ func TestPacketTypeConstants(t *testing.T) {
 }
 
 func TestFlagConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(FlagUnencrypted), 0x01},
-		{uint8(FlagSingleConnect), 0x04},
+	for _, c := range []struct{ got, want HeaderFlag }{
+		{FlagUnencrypted, 0x01},
+		{FlagSingleConnect, 0x04},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -40,10 +40,10 @@ func TestFlagConstants(t *testing.T) {
 }
 
 func TestAuthenActionConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthenActionLogin), 0x01},
-		{uint8(AuthenActionChPass), 0x02},
-		{uint8(AuthenActionSendAuth), 0x04},
+	for _, c := range []struct{ got, want AuthenAction }{
+		{AuthenActionLogin, 0x01},
+		{AuthenActionChPass, 0x02},
+		{AuthenActionSendAuth, 0x04},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -52,12 +52,12 @@ func TestAuthenActionConstants(t *testing.T) {
 }
 
 func TestAuthenTypeConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthenTypeASCII), 0x01},
-		{uint8(AuthenTypePAP), 0x02},
-		{uint8(AuthenTypeCHAP), 0x03},
-		{uint8(AuthenTypeMSCHAP), 0x05},
-		{uint8(AuthenTypeMSCHAPV2), 0x06},
+	for _, c := range []struct{ got, want AuthenType }{
+		{AuthenTypeASCII, 0x01},
+		{AuthenTypePAP, 0x02},
+		{AuthenTypeCHAP, 0x03},
+		{AuthenTypeMSCHAP, 0x05},
+		{AuthenTypeMSCHAPV2, 0x06},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -66,15 +66,15 @@ func TestAuthenTypeConstants(t *testing.T) {
 }
 
 func TestAuthenServiceConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthenServiceNone), 0x00},
-		{uint8(AuthenServiceLogin), 0x01},
-		{uint8(AuthenServiceEnable), 0x02},
-		{uint8(AuthenServicePPP), 0x03},
-		{uint8(AuthenServicePT), 0x05},
-		{uint8(AuthenServiceRCMD), 0x06},
-		{uint8(AuthenServiceX25), 0x07},
-		{uint8(AuthenServiceNASI), 0x08},
+	for _, c := range []struct{ got, want AuthenService }{
+		{AuthenServiceNone, 0x00},
+		{AuthenServiceLogin, 0x01},
+		{AuthenServiceEnable, 0x02},
+		{AuthenServicePPP, 0x03},
+		{AuthenServicePT, 0x05},
+		{AuthenServiceRCMD, 0x06},
+		{AuthenServiceX25, 0x07},
+		{AuthenServiceNASI, 0x08},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -83,15 +83,15 @@ func TestAuthenServiceConstants(t *testing.T) {
 }
 
 func TestAuthenStatusConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthenStatusPass), 0x01},
-		{uint8(AuthenStatusFail), 0x02},
-		{uint8(AuthenStatusGetData), 0x03},
-		{uint8(AuthenStatusGetUser), 0x04},
-		{uint8(AuthenStatusGetPass), 0x05},
-		{uint8(AuthenStatusRestart), 0x06},
-		{uint8(AuthenStatusError), 0x07},
-		{uint8(AuthenStatusFollow), 0x21},
+	for _, c := range []struct{ got, want AuthenStatus }{
+		{AuthenStatusPass, 0x01},
+		{AuthenStatusFail, 0x02},
+		{AuthenStatusGetData, 0x03},
+		{AuthenStatusGetUser, 0x04},
+		{AuthenStatusGetPass, 0x05},
+		{AuthenStatusRestart, 0x06},
+		{AuthenStatusError, 0x07},
+		{AuthenStatusFollow, 0x21},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -100,32 +100,30 @@ func TestAuthenStatusConstants(t *testing.T) {
 }
 
 func TestAuthenReplyFlagConstants(t *testing.T) {
-	got := uint8(AuthenReplyFlagNoEcho)
-	if got != 0x01 {
-		t.Errorf("got %v, want %v", got, uint8(0x01))
+	if AuthenReplyFlagNoEcho != 0x01 {
+		t.Errorf("got %v, want %v", AuthenReplyFlagNoEcho, 0x01)
 	}
 }
 
 func TestAuthenContinueFlagConstants(t *testing.T) {
-	got := uint8(AuthenContinueFlagAbort)
-	if got != 0x01 {
-		t.Errorf("got %v, want %v", got, uint8(0x01))
+	if AuthenContinueFlagAbort != 0x01 {
+		t.Errorf("got %v, want %v", AuthenContinueFlagAbort, 0x01)
 	}
 }
 
 func TestAuthenMethodConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthenMethodNotSet), 0x00},
-		{uint8(AuthenMethodNone), 0x01},
-		{uint8(AuthenMethodKRB5), 0x02},
-		{uint8(AuthenMethodLine), 0x03},
-		{uint8(AuthenMethodEnable), 0x04},
-		{uint8(AuthenMethodLocal), 0x05},
-		{uint8(AuthenMethodTACACSPlus), 0x06},
-		{uint8(AuthenMethodGuest), 0x08},
-		{uint8(AuthenMethodRadius), 0x10},
-		{uint8(AuthenMethodKRB4), 0x11},
-		{uint8(AuthenMethodRCMD), 0x20},
+	for _, c := range []struct{ got, want AuthenMethod }{
+		{AuthenMethodNotSet, 0x00},
+		{AuthenMethodNone, 0x01},
+		{AuthenMethodKRB5, 0x02},
+		{AuthenMethodLine, 0x03},
+		{AuthenMethodEnable, 0x04},
+		{AuthenMethodLocal, 0x05},
+		{AuthenMethodTACACSPlus, 0x06},
+		{AuthenMethodGuest, 0x08},
+		{AuthenMethodRadius, 0x10},
+		{AuthenMethodKRB4, 0x11},
+		{AuthenMethodRCMD, 0x20},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -134,12 +132,12 @@ func TestAuthenMethodConstants(t *testing.T) {
 }
 
 func TestAuthorStatusConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AuthorStatusPassAdd), 0x01},
-		{uint8(AuthorStatusPassRepl), 0x02},
-		{uint8(AuthorStatusFail), 0x10},
-		{uint8(AuthorStatusError), 0x11},
-		{uint8(AuthorStatusFollow), 0x21},
+	for _, c := range []struct{ got, want AuthorStatus }{
+		{AuthorStatusPassAdd, 0x01},
+		{AuthorStatusPassRepl, 0x02},
+		{AuthorStatusFail, 0x10},
+		{AuthorStatusError, 0x11},
+		{AuthorStatusFollow, 0x21},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -148,10 +146,10 @@ func TestAuthorStatusConstants(t *testing.T) {
 }
 
 func TestAcctFlagConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AcctFlagStart), 0x02},
-		{uint8(AcctFlagStop), 0x04},
-		{uint8(AcctFlagWatchdog), 0x08},
+	for _, c := range []struct{ got, want AcctFlag }{
+		{AcctFlagStart, 0x02},
+		{AcctFlagStop, 0x04},
+		{AcctFlagWatchdog, 0x08},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)
@@ -160,10 +158,10 @@ func TestAcctFlagConstants(t *testing.T) {
 }
 
 func TestAcctStatusConstants(t *testing.T) {
-	for _, c := range []struct{ got, want uint8 }{
-		{uint8(AcctStatusSuccess), 0x01},
-		{uint8(AcctStatusError), 0x02},
-		{uint8(AcctStatusFollow), 0x21},
+	for _, c := range []struct{ got, want AcctStatus }{
+		{AcctStatusSuccess, 0x01},
+		{AcctStatusError, 0x02},
+		{AcctStatusFollow, 0x21},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %v, want %v", c.got, c.want)

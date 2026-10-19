@@ -829,12 +829,12 @@ func FuzzParseAcctPacket(f *testing.F) {
 func FuzzParsePacket(f *testing.F) {
 	start := &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
 	if data, _ := start.MarshalBinary(); data != nil {
-		f.Add(uint8(PacketTypeAuthen), uint8(1), data)
+		f.Add(byte(PacketTypeAuthen), uint8(1), data)
 	}
 
 	authorReq := &AuthorRequest{AuthenMethod: AuthenMethod(AuthenTypePAP), PrivLevel: 1, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("user")}
 	if data, _ := authorReq.MarshalBinary(); data != nil {
-		f.Add(uint8(PacketTypeAuthor), uint8(1), data)
+		f.Add(byte(PacketTypeAuthor), uint8(1), data)
 	}
 
 	acctReq := &AcctRequest{
@@ -846,7 +846,7 @@ func FuzzParsePacket(f *testing.F) {
 		User:         []byte("user"),
 	}
 	if data, _ := acctReq.MarshalBinary(); data != nil {
-		f.Add(uint8(PacketTypeAcct), uint8(1), data)
+		f.Add(byte(PacketTypeAcct), uint8(1), data)
 	}
 
 	f.Fuzz(func(t *testing.T, packetType, seqNo uint8, data []byte) {

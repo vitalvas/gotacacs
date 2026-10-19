@@ -60,17 +60,17 @@ func TestAuthenStartMarshalBinary(t *testing.T) {
 			t.Fatalf("len = %d, want %d", len(data), 8)
 		}
 
-		if data[0] != uint8(AuthenActionLogin) {
-			t.Errorf("got %v, want %v", data[0], uint8(AuthenActionLogin))
+		if data[0] != byte(AuthenActionLogin) {
+			t.Errorf("got %v, want %v", data[0], byte(AuthenActionLogin))
 		}
 		if data[1] != uint8(1) {
 			t.Errorf("got %v, want %v", data[1], uint8(1))
 		}
-		if data[2] != uint8(AuthenTypeASCII) {
-			t.Errorf("got %v, want %v", data[2], uint8(AuthenTypeASCII))
+		if data[2] != byte(AuthenTypeASCII) {
+			t.Errorf("got %v, want %v", data[2], byte(AuthenTypeASCII))
 		}
-		if data[3] != uint8(AuthenServiceLogin) {
-			t.Errorf("got %v, want %v", data[3], uint8(AuthenServiceLogin))
+		if data[3] != byte(AuthenServiceLogin) {
+			t.Errorf("got %v, want %v", data[3], byte(AuthenServiceLogin))
 		}
 		if data[4] != uint8(0) {
 			t.Errorf("got %v, want %v", data[4], uint8(0)) // user_len
@@ -324,8 +324,8 @@ func TestAuthenReplyMarshalBinary(t *testing.T) {
 			t.Fatalf("len = %d, want %d", len(data), 6)
 		}
 
-		if data[0] != uint8(AuthenStatusPass) {
-			t.Errorf("got %v, want %v", data[0], uint8(AuthenStatusPass))
+		if data[0] != byte(AuthenStatusPass) {
+			t.Errorf("got %v, want %v", data[0], byte(AuthenStatusPass))
 		}
 		if data[1] != uint8(0) {
 			t.Errorf("got %v, want %v", data[1], uint8(0)) // flags
@@ -356,11 +356,11 @@ func TestAuthenReplyMarshalBinary(t *testing.T) {
 			t.Fatalf("len = %d, want %d", len(data), expectedLen)
 		}
 
-		if data[0] != uint8(AuthenStatusGetPass) {
-			t.Errorf("got %v, want %v", data[0], uint8(AuthenStatusGetPass))
+		if data[0] != byte(AuthenStatusGetPass) {
+			t.Errorf("got %v, want %v", data[0], byte(AuthenStatusGetPass))
 		}
-		if data[1] != uint8(AuthenReplyFlagNoEcho) {
-			t.Errorf("got %v, want %v", data[1], uint8(AuthenReplyFlagNoEcho))
+		if data[1] != byte(AuthenReplyFlagNoEcho) {
+			t.Errorf("got %v, want %v", data[1], byte(AuthenReplyFlagNoEcho))
 		}
 	})
 
@@ -623,8 +623,8 @@ func TestAuthenContinueMarshalBinary(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if data[4] != uint8(AuthenContinueFlagAbort) {
-			t.Errorf("got %v, want %v", data[4], uint8(AuthenContinueFlagAbort))
+		if data[4] != byte(AuthenContinueFlagAbort) {
+			t.Errorf("got %v, want %v", data[4], byte(AuthenContinueFlagAbort))
 		}
 	})
 

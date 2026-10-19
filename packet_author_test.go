@@ -411,8 +411,8 @@ func TestAuthorResponseMarshalBinary(t *testing.T) {
 			t.Fatalf("len = %d, want %d", len(data), 6)
 		}
 
-		if data[0] != uint8(AuthorStatusPassAdd) {
-			t.Errorf("got %v, want %v", data[0], uint8(AuthorStatusPassAdd))
+		if data[0] != byte(AuthorStatusPassAdd) {
+			t.Errorf("got %v, want %v", data[0], byte(AuthorStatusPassAdd))
 		}
 		if data[1] != uint8(0) {
 			t.Errorf("got %v, want %v", data[1], uint8(0)) // arg_cnt

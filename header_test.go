@@ -13,7 +13,7 @@ func TestNewHeader(t *testing.T) {
 			t.Errorf("got %v, want %v", h.Version, uint8(0xc0))
 		}
 		if h.Type != PacketTypeAuthen {
-			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthen))
+			t.Errorf("got %v, want %v", h.Type, byte(PacketTypeAuthen))
 		}
 		if h.SeqNo != uint8(1) {
 			t.Errorf("got %v, want %v", h.SeqNo, uint8(1))
@@ -32,7 +32,7 @@ func TestNewHeader(t *testing.T) {
 	t.Run("authorization header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAuthor, 0xABCDEF00)
 		if h.Type != PacketTypeAuthor {
-			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAuthor))
+			t.Errorf("got %v, want %v", h.Type, byte(PacketTypeAuthor))
 		}
 		if h.SessionID != uint32(0xABCDEF00) {
 			t.Errorf("got %v, want %v", h.SessionID, uint32(0xABCDEF00))
@@ -42,7 +42,7 @@ func TestNewHeader(t *testing.T) {
 	t.Run("accounting header", func(t *testing.T) {
 		h := NewHeader(PacketTypeAcct, 0xFFFFFFFF)
 		if h.Type != PacketTypeAcct {
-			t.Errorf("got %v, want %v", h.Type, uint8(PacketTypeAcct))
+			t.Errorf("got %v, want %v", h.Type, byte(PacketTypeAcct))
 		}
 		if h.SessionID != uint32(0xFFFFFFFF) {
 			t.Errorf("got %v, want %v", h.SessionID, uint32(0xFFFFFFFF))

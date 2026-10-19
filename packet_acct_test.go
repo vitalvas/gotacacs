@@ -181,8 +181,8 @@ func TestAcctRequestMarshalBinary(t *testing.T) {
 		}
 
 		// Verify header fields
-		if data[0] != uint8(AcctFlagStop) {
-			t.Errorf("got %v, want %v", data[0], uint8(AcctFlagStop))
+		if data[0] != byte(AcctFlagStop) {
+			t.Errorf("got %v, want %v", data[0], byte(AcctFlagStop))
 		}
 		if data[5] != uint8(5) { // user_len
 			t.Errorf("got %v, want %v", data[5], uint8(5))
@@ -434,8 +434,8 @@ func TestAcctReplyMarshalBinary(t *testing.T) {
 		if len(data) != expectedLen {
 			t.Fatalf("len = %d, want %d", len(data), expectedLen)
 		}
-		if data[4] != uint8(AcctStatusError) {
-			t.Errorf("got %v, want %v", data[4], uint8(AcctStatusError))
+		if data[4] != byte(AcctStatusError) {
+			t.Errorf("got %v, want %v", data[4], byte(AcctStatusError))
 		}
 	})
 
