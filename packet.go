@@ -177,9 +177,82 @@ func isBadSecretError(actualLen, expectedLen int) bool {
 	return expectedLen > actualLen*2+16
 }
 
+// Arg is a single TACACS+ argument-value pair (RFC 8907 Section 6.1).
+// A mandatory argument uses the "=" separator; an optional one uses "*".
+type Arg struct {
+	Name     string
+	Value    string
+	Optional bool
+}
+
+// IsValidName reports whether the argument name is legal per RFC 8907
+// Section 6.1: a non-empty name that contains neither separator ("=" or "*").
+func (a Arg) IsValidName() bool {
+	return a.Name != "" &&
+		strings.IndexByte(a.Name, '=') < 0 &&
+		strings.IndexByte(a.Name, '*') < 0
+}
+
+// String renders the argument in wire form, "name=value" or "name*value".
+func (a Arg) String() string {
+	sep := "="
+	if a.Optional {
+		sep = "*"
+	}
+	return fmt.Sprintf("%s%s%s", a.Name, sep, a.Value)
+}
+
+// ParseArg splits a TACACS+ argument on the first "=" or "*" separator,
+// per RFC 8907 Section 6.1: the name ends at the first separator and the
+// value is everything after it, so a value may itself contain separators.
+// It returns ok=false when the argument contains no separator.
+func ParseArg(arg string) (Arg, bool) {
+	eq := strings.IndexByte(arg, '=')
+	star := strings.IndexByte(arg, '*')
+	switch {
+	case eq < 0 && star < 0:
+		return Arg{}, false
+	case star < 0 || (eq >= 0 && eq < star):
+		return Arg{Name: arg[:eq], Value: arg[eq+1:]}, true
+	default:
+		return Arg{Name: arg[:star], Value: arg[star+1:], Optional: true}, true
+	}
+}
+
+// ParseArgs parses raw wire arguments into Arg pairs, preserving the
+// mandatory/optional distinction. Arguments with no separator are skipped.
+func ParseArgs(rawArgs [][]byte) []Arg {
+	var args []Arg
+	for _, raw := range rawArgs {
+		if arg, ok := ParseArg(string(raw)); ok {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
+// MarshalArgs renders Arg pairs to raw wire arguments, the inverse of
+// ParseArgs. Unlike ArgValues.Output, it preserves each argument's separator
+// (mandatory "=" versus optional "*"), order, and duplicates, so it is the
+// conformant way to emit authorization and accounting arguments. Arguments
+// whose name is empty or contains a separator are skipped: RFC 8907
+// Section 6.1 forbids a separator in a name, and emitting one would reparse to
+// a different name and value. It returns nil when nothing valid remains.
+func MarshalArgs(args []Arg) [][]byte {
+	var out [][]byte
+	for _, arg := range args {
+		if !arg.IsValidName() {
+			continue
+		}
+		out = append(out, []byte(arg.String()))
+	}
+	return out
+}
+
 // ArgValues maps TACACS+ argument keys to values.
 // It is similar to net/url.Values, but Output returns TACACS+ "key=value"
-// byte arguments without URL escaping.
+// byte arguments without URL escaping. ArgValues does not preserve the
+// mandatory/optional separator; use ParseArgs when that distinction matters.
 type ArgValues map[string][]string
 
 // Get returns the first value associated with key.
@@ -256,36 +329,37 @@ func (v ArgValues) Output() [][]byte {
 	return args
 }
 
-// ArgValuesFromArgs parses TACACS+ "key=value" arguments into ArgValues.
-// Arguments without "=" are ignored.
+// ArgValuesFromArgs parses TACACS+ arguments into ArgValues, splitting each on
+// the first "=" or "*" separator. Arguments without a separator are ignored.
 func ArgValuesFromArgs(args []string) ArgValues {
 	var values ArgValues
 	for _, arg := range args {
-		key, value, ok := strings.Cut(arg, "=")
+		parsed, ok := ParseArg(arg)
 		if !ok {
 			continue
 		}
 		if values == nil {
 			values = make(ArgValues)
 		}
-		values.Add(key, value)
+		values.Add(parsed.Name, parsed.Value)
 	}
 	return values
 }
 
-// ArgValuesFromRawArgs parses TACACS+ raw byte arguments into ArgValues.
-// Arguments without "=" are ignored.
+// ArgValuesFromRawArgs parses TACACS+ raw byte arguments into ArgValues,
+// splitting each on the first "=" or "*" separator. Arguments without a
+// separator are ignored.
 func ArgValuesFromRawArgs(rawArgs [][]byte) ArgValues {
 	var values ArgValues
 	for _, arg := range rawArgs {
-		key, value, ok := strings.Cut(string(arg), "=")
+		parsed, ok := ParseArg(string(arg))
 		if !ok {
 			continue
 		}
 		if values == nil {
 			values = make(ArgValues)
 		}
-		values.Add(key, value)
+		values.Add(parsed.Name, parsed.Value)
 	}
 	return values
 }

@@ -42,6 +42,11 @@ Password Authentication Protocol (PAP) sends credentials in a single START reque
 ctx := context.Background()
 
 reply, err := client.Authenticate(ctx, "username", "password")
+if errors.Is(err, gotacacs.ErrAuthenticationFailed) {
+    fmt.Println("Authentication failed")
+    fmt.Printf("Server message: %s\n", string(reply.ServerMsg))
+    return
+}
 if err != nil {
     log.Fatal(err)
 }
@@ -49,13 +54,12 @@ if err != nil {
 if reply.IsPass() {
     fmt.Println("Authentication successful")
     fmt.Printf("Server message: %s\n", string(reply.ServerMsg))
-} else if reply.IsFail() {
-    fmt.Println("Authentication failed")
-    fmt.Printf("Server message: %s\n", string(reply.ServerMsg))
 } else if reply.IsError() {
     fmt.Println("Server error occurred")
 }
 ```
+
+A FAIL status returns the reply together with `ErrAuthenticationFailed`, so the server message stays available while `errors.Is` branching works.
 
 ### Authentication with Extended Context
 
@@ -74,6 +78,8 @@ if err != nil {
     log.Fatal(err)
 }
 ```
+
+Set `Action: gotacacs.AuthenActionChPass` to request a password change instead of a login; the zero value is `AuthenActionLogin`. Set `Session` to use a specific session ID on the wire instead of a fresh random one.
 
 ### ASCII Authentication (Interactive)
 
@@ -99,6 +105,28 @@ ASCII authentication uses version `0xc0`. The client allows up to 20 prompt resp
 
 If input is requested, a nil `promptHandler` returns `ErrInvalidPacket`. An answer exceeding the CONTINUE field limit of 65,535 bytes returns an error and closes the connection. If the callback returns an error, the client attempts to send ABORT, closes the connection, and returns that error. Implement `readPassword` and `readLine` in your application; the callback runs synchronously and must handle cancellation of its own input operation.
 
+### CHAP Authentication
+
+CHAP ([RFC 8907 Section 5.4.2.3](https://www.rfc-editor.org/rfc/rfc8907.html#section-5.4.2.3)) is a single START / single REPLY exchange. The caller supplies the PPP id and challenge; the client computes the MD5 response from the shared secret and sends it in the START data field:
+
+```go
+challenge := make([]byte, 16) // SHOULD be >= 8 octets and unpredictable
+if _, err := rand.Read(challenge); err != nil {
+    log.Fatal(err)
+}
+
+reply, err := client.AuthenticateCHAP(ctx, "username", id, []byte("shared-secret"), challenge)
+if errors.Is(err, gotacacs.ErrAuthenticationFailed) {
+    log.Println("CHAP rejected")
+    return
+}
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+CHAP uses version `0xc1`. A FAIL status returns the reply with `ErrAuthenticationFailed`. The lower-level helpers `CHAPResponse`, `BuildCHAPData`, `ParseCHAPData`, and `NewCHAPStart` are exported for callers assembling the exchange manually; MS-CHAP and MS-CHAPv2 are not implemented.
+
 ### AuthenReply Methods
 
 | Method | Description |
@@ -119,6 +147,11 @@ resp, err := client.Authorize(ctx, "username", []string{
     "cmd=show",
     "cmd-arg=running-config",
 })
+if errors.Is(err, gotacacs.ErrAuthorizationDenied) {
+    fmt.Println("Authorization denied")
+    fmt.Printf("Reason: %s\n", string(resp.ServerMsg))
+    return
+}
 if err != nil {
     log.Fatal(err)
 }
@@ -129,11 +162,10 @@ if resp.IsPass() {
 	// Get server-provided arguments by key
 	values := resp.ArgValues()
 	fmt.Printf("Privilege level: %s\n", values.Get("priv-lvl"))
-} else if resp.IsFail() {
-	fmt.Println("Authorization denied")
-	fmt.Printf("Reason: %s\n", string(resp.ServerMsg))
 }
 ```
+
+A FAIL status returns the response together with `ErrAuthorizationDenied`.
 
 ### Common Authorization Arguments
 
@@ -368,6 +400,10 @@ client := gotacacs.NewClient(
 
 | Error | Description |
 |-------|-------------|
+| `ErrAuthenticationFailed` | Authentication returned FAIL; the reply is returned alongside the error |
+| `ErrAuthorizationDenied` | Authorization returned FAIL; the response is returned alongside the error |
+| `ErrAccountingFailed` | Accounting returned ERROR; the reply is returned alongside the error |
+| `ErrTimeout` | A network read, write, or dial timed out; wraps the underlying net error |
 | `ErrConnectionClosed` | Server closed the connection |
 | `ErrInvalidPacket` | Invalid packet or input, including a required prompt callback missing or a plaintext dialer result in TLS mode |
 | `ErrInvalidSequence` | Sequence number mismatch |
@@ -385,6 +421,10 @@ FOLLOW remains a distinct `Status` value. Authentication methods return it with 
 reply, err := client.Authenticate(ctx, "user", "pass")
 if err != nil {
     switch {
+    case errors.Is(err, gotacacs.ErrAuthenticationFailed):
+        log.Printf("Credentials rejected: %s", reply.ServerMsg)
+    case errors.Is(err, gotacacs.ErrTimeout):
+        log.Println("Server did not respond in time")
     case errors.Is(err, gotacacs.ErrConnectionClosed):
         log.Println("Connection was closed, retrying...")
         // Retry logic

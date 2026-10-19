@@ -414,8 +414,8 @@ func TestClientAuthenticate(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "wrongpass")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		if !reply.IsFail() {
 			t.Errorf("expected true")
@@ -1506,14 +1506,13 @@ func TestClientErrorPaths(t *testing.T) {
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		_, err := client.Authenticate(context.Background(), "user", "pass")
 
-		if err == nil {
-			t.Fatal("expected an error")
+		// RFC 8907 10.5.2: a secret-configured client that receives a
+		// response with the unencrypted flag set MUST process it as a FAIL.
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Errorf("error %v is not ErrAuthenticationFailed", err)
 		}
-		if !errors.Is(err, ErrInvalidPacket) {
-			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
-		}
-		if !strings.Contains(err.Error(), "unencrypted flag") {
-			t.Errorf("error %q does not contain %q", err.Error(), "unencrypted flag")
+		if client.IsConnected() {
+			t.Error("client must close the session on the flag mismatch")
 		}
 	})
 }
@@ -2190,8 +2189,8 @@ func TestAuthenticateASCIIErrors(t *testing.T) {
 		result, err := client.AuthenticateASCII(context.Background(), "user", func(_ string, _ bool) (string, error) {
 			return "pass", nil
 		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		if !result.IsFail() {
 			t.Errorf("expected true")
@@ -2359,8 +2358,8 @@ func TestAuthorizeErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthorizationDenied) {
+			t.Fatalf("got %v, want ErrAuthorizationDenied", err)
 		}
 		if result.IsPass() {
 			t.Errorf("expected false")
@@ -2449,8 +2448,8 @@ func TestAccountingErrors(t *testing.T) {
 
 		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
 		result, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAccountingFailed) {
+			t.Fatalf("got %v, want ErrAccountingFailed", err)
 		}
 		if result.IsSuccess() {
 			t.Errorf("expected false")
@@ -2740,7 +2739,7 @@ func TestClientContextCancellation(t *testing.T) {
 
 func TestClientPAPVersion(t *testing.T) {
 	var version Version
-	server := NewServer(WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
+	server := NewServer(WithServerAllowInsecure(true), WithAuthenticationHandler(AuthenHandlerFunc(func(_ context.Context, req *AuthenRequest) *AuthenReply {
 		version = req.Header.Version
 		return &AuthenReply{Status: AuthenStatusPass}
 	})))
@@ -2849,7 +2848,10 @@ func TestClientASCIIInputFailures(t *testing.T) {
 }
 
 func TestClientASCIIPromptBoundary(t *testing.T) {
-	server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+	// Disable the server-side retry cap so this test can exercise the client's
+	// own 20-prompt boundary (the server cap is covered by
+	// TestServerLimitsGetUserRetries).
+	server := NewServer(WithServerAllowInsecure(true), WithServerMaxAuthenRetries(0), WithAuthenticationHandler(&multiStepHandler{
 		onStart: func(context.Context, *AuthenRequest) *AuthenReply {
 			return &AuthenReply{Status: AuthenStatusGetPass}
 		},
@@ -2955,4 +2957,297 @@ func TestClientClearsExpiredDeadlines(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientSentinelErrors(t *testing.T) {
+	secret := []byte("testsecret")
+
+	t.Run("authentication fail returns ErrAuthenticationFailed with reply", func(t *testing.T) {
+		reply := &AuthenReply{Status: AuthenStatusFail, ServerMsg: []byte("denied")}
+		replyBody, _ := reply.MarshalBinary()
+		server := newMockServer(t, createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		}))
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		got, err := client.Authenticate(context.Background(), "user", "badpass")
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Errorf("got %v, want ErrAuthenticationFailed", err)
+		}
+		if got == nil || !got.IsFail() {
+			t.Error("expected the FAIL reply alongside the error")
+		}
+	})
+
+	t.Run("ascii authentication fail returns ErrAuthenticationFailed with reply", func(t *testing.T) {
+		reply := &AuthenReply{Status: AuthenStatusFail}
+		replyBody, _ := reply.MarshalBinary()
+		server := newMockServer(t, createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthen,
+			seqNo:      2,
+			body:       replyBody,
+		}))
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		got, err := client.AuthenticateASCII(context.Background(), "user", nil)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Errorf("got %v, want ErrAuthenticationFailed", err)
+		}
+		if got == nil || !got.IsFail() {
+			t.Error("expected the FAIL reply alongside the error")
+		}
+	})
+
+	t.Run("authorization fail returns ErrAuthorizationDenied with response", func(t *testing.T) {
+		resp := &AuthorResponse{Status: AuthorStatusFail, ServerMsg: []byte("no shell")}
+		respBody, _ := resp.MarshalBinary()
+		server := newMockServer(t, createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAuthor,
+			seqNo:      2,
+			body:       respBody,
+		}))
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		got, err := client.Authorize(context.Background(), "user", []string{"service=shell"})
+		if !errors.Is(err, ErrAuthorizationDenied) {
+			t.Errorf("got %v, want ErrAuthorizationDenied", err)
+		}
+		if got == nil || got.Status != AuthorStatusFail {
+			t.Error("expected the FAIL response alongside the error")
+		}
+	})
+
+	t.Run("accounting error returns ErrAccountingFailed with reply", func(t *testing.T) {
+		reply := &AcctReply{Status: AcctStatusError}
+		replyBody, _ := reply.MarshalBinary()
+		server := newMockServer(t, createMockHandler(secret, mockResponseConfig{
+			packetType: PacketTypeAcct,
+			seqNo:      2,
+			body:       replyBody,
+		}))
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		got, err := client.Accounting(context.Background(), AcctFlagStart, "user", []string{"task_id=1"})
+		if !errors.Is(err, ErrAccountingFailed) {
+			t.Errorf("got %v, want ErrAccountingFailed", err)
+		}
+		if got == nil || !got.IsError() {
+			t.Error("expected the ERROR reply alongside the error")
+		}
+	})
+
+	t.Run("read timeout returns ErrTimeout", func(t *testing.T) {
+		server := newMockServer(t, func(conn net.Conn) {
+			// Consume the request and never reply; the client read deadline fires.
+			defer conn.Close()
+			_, _ = io.Copy(io.Discard, conn)
+		})
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"), WithTimeout(100*time.Millisecond))
+		_, err := client.Authenticate(context.Background(), "user", "pass")
+		if !errors.Is(err, ErrTimeout) {
+			t.Errorf("got %v, want ErrTimeout", err)
+		}
+	})
+}
+
+func TestClientAuthenticateCHAP(t *testing.T) {
+	secret := []byte("chap-secret")
+	runServer := func(t *testing.T, accept bool) *mockServer {
+		return newMockServer(t, func(conn net.Conn) {
+			defer conn.Close()
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+			deob := Obfuscate(header, secret, body)
+
+			start := &AuthenStart{}
+			if err := start.UnmarshalBinary(deob); err != nil {
+				t.Errorf("server could not decode CHAP START: %v", err)
+				return
+			}
+			status := AuthenStatusFail
+			if start.AuthenType == AuthenTypeCHAP {
+				ok, err := VerifyCHAP(secret, start.Data)
+				if err != nil {
+					t.Errorf("VerifyCHAP: %v", err)
+				}
+				if ok && accept {
+					status = AuthenStatusPass
+				}
+			}
+			reply := &AuthenReply{Status: status}
+			replyBody, _ := reply.MarshalBinary()
+			respHeader := &Header{Version: 0xc1, Type: PacketTypeAuthen, SeqNo: 2, SessionID: header.SessionID, Length: uint32(len(replyBody))}
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(Obfuscate(respHeader, secret, replyBody))
+		})
+	}
+
+	t.Run("valid response passes", func(t *testing.T) {
+		server := runServer(t, true)
+		defer server.Close()
+		client := NewClient(WithAddress(server.Addr()), WithSecret("chap-secret"))
+		reply, err := client.AuthenticateCHAP(context.Background(), "alice", 0x01, secret, []byte("a-good-challenge"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsPass() {
+			t.Error("expected PASS for a valid CHAP response")
+		}
+	})
+
+	t.Run("wrong secret fails", func(t *testing.T) {
+		server := runServer(t, true)
+		defer server.Close()
+		// Client computes the response with a different secret than the server.
+		client := NewClient(WithAddress(server.Addr()), WithSecret("chap-secret"))
+		reply, err := client.AuthenticateCHAP(context.Background(), "alice", 0x01, []byte("other"), []byte("a-good-challenge"))
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
+		}
+		if reply == nil || !reply.IsFail() {
+			t.Error("expected the FAIL reply alongside the error")
+		}
+	})
+}
+
+func TestClientFlagMismatchIsAuthFailure(t *testing.T) {
+	// RFC 8907 10.5.2: a client with a configured secret that receives a
+	// response carrying TAC_PLUS_UNENCRYPTED_FLAG MUST close the session and
+	// process it the same way as a STATUS_FAIL. The error must therefore be
+	// ErrAuthenticationFailed, not a generic protocol error.
+	secret := []byte("testsecret")
+	server := newMockServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		headerBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, headerBuf)
+		header := &Header{}
+		header.UnmarshalBinary(headerBuf)
+		body := make([]byte, header.Length)
+		io.ReadFull(conn, body)
+
+		// Reply with the unencrypted flag set and a cleartext body, which a
+		// secret-configured client must treat as a FAIL.
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+		respHeader := &Header{Version: 0xc1, Type: PacketTypeAuthen, SeqNo: 2, SessionID: header.SessionID, Length: uint32(len(replyBody))}
+		respHeader.SetUnencrypted(true)
+		respHeaderData, _ := respHeader.MarshalBinary()
+		conn.Write(respHeaderData)
+		conn.Write(replyBody) // cleartext, matching the flag
+	})
+	defer server.Close()
+
+	client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+	_, err := client.Authenticate(context.Background(), "user", "pass")
+	if !errors.Is(err, ErrAuthenticationFailed) {
+		t.Errorf("got %v, want ErrAuthenticationFailed", err)
+	}
+	if client.IsConnected() {
+		t.Error("client must close the session on a flag mismatch")
+	}
+	_ = secret
+}
+
+func TestAuthenticateWithContextChangePassword(t *testing.T) {
+	// RFC 8907 Section 5.1: the CHPASS action must be reachable from the client.
+	secret := []byte("testsecret")
+	seenAction := make(chan AuthenAction, 1)
+	server := newMockServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		headerBuf := make([]byte, HeaderLength)
+		io.ReadFull(conn, headerBuf)
+		header := &Header{}
+		header.UnmarshalBinary(headerBuf)
+		body := make([]byte, header.Length)
+		io.ReadFull(conn, body)
+		deob := Obfuscate(header, secret, body)
+		start := &AuthenStart{}
+		if err := start.UnmarshalBinary(deob); err == nil {
+			seenAction <- start.Action
+		}
+
+		reply := &AuthenReply{Status: AuthenStatusPass}
+		replyBody, _ := reply.MarshalBinary()
+		respHeader := &Header{Version: 0xc1, Type: PacketTypeAuthen, SeqNo: 2, SessionID: header.SessionID, Length: uint32(len(replyBody))}
+		respHeaderData, _ := respHeader.MarshalBinary()
+		conn.Write(respHeaderData)
+		conn.Write(Obfuscate(respHeader, secret, replyBody))
+	})
+	defer server.Close()
+
+	client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+	reply, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+		Action:   AuthenActionChPass,
+		Username: "user",
+		Password: "newpass",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !reply.IsPass() {
+		t.Error("expected pass")
+	}
+	if got := <-seenAction; got != AuthenActionChPass {
+		t.Errorf("got action %#x on the wire, want CHPASS %#x", got, AuthenActionChPass)
+	}
+}
+
+func TestAuthenticateWithContextSession(t *testing.T) {
+	t.Run("caller-supplied session ID is used on the wire", func(t *testing.T) {
+		secret := []byte("testsecret")
+		seenSessionID := make(chan uint32, 1)
+		server := newMockServer(t, func(conn net.Conn) {
+			defer conn.Close()
+			headerBuf := make([]byte, HeaderLength)
+			io.ReadFull(conn, headerBuf)
+			header := &Header{}
+			header.UnmarshalBinary(headerBuf)
+			body := make([]byte, header.Length)
+			io.ReadFull(conn, body)
+			seenSessionID <- header.SessionID
+
+			reply := &AuthenReply{Status: AuthenStatusPass}
+			replyBody, _ := reply.MarshalBinary()
+			respHeader := &Header{
+				Version:   0xc1,
+				Type:      PacketTypeAuthen,
+				SeqNo:     2,
+				SessionID: header.SessionID,
+				Length:    uint32(len(replyBody)),
+			}
+			respHeaderData, _ := respHeader.MarshalBinary()
+			conn.Write(respHeaderData)
+			conn.Write(Obfuscate(respHeader, secret, replyBody))
+		})
+		defer server.Close()
+
+		client := NewClient(WithAddress(server.Addr()), WithSecret("testsecret"))
+		reply, err := client.AuthenticateWithContext(context.Background(), &AuthenticateContext{
+			Session:  NewSessionWithID(0x1234abcd, true),
+			Username: "user",
+			Password: "pass",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !reply.IsPass() {
+			t.Error("expected pass")
+		}
+		if got := <-seenSessionID; got != 0x1234abcd {
+			t.Errorf("got session ID %#x, want 0x1234abcd", got)
+		}
+	})
 }

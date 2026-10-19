@@ -83,6 +83,33 @@ func TestAcctRequestArgs(t *testing.T) {
 	})
 }
 
+func TestAcctRequestValidFlags(t *testing.T) {
+	// RFC 8907 Section 7.2 Table 2: over flags&0xE, only 0x2, 0x4, 0x8, 0xA
+	// are valid; 0x0, 0x6, 0xC, 0xE are INVALID.
+	cases := []struct {
+		name  string
+		flags AcctFlag
+		valid bool
+	}{
+		{"start", AcctFlagStart, true},
+		{"stop", AcctFlagStop, true},
+		{"watchdog no update", AcctFlagWatchdog, true},
+		{"watchdog with start", AcctFlagWatchdog | AcctFlagStart, true},
+		{"none set", 0, false},
+		{"start and stop", AcctFlagStart | AcctFlagStop, false},
+		{"stop and watchdog", AcctFlagStop | AcctFlagWatchdog, false},
+		{"all three", AcctFlagStart | AcctFlagStop | AcctFlagWatchdog, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &AcctRequest{Flags: tc.flags}
+			if got := req.HasValidFlags(); got != tc.valid {
+				t.Errorf("HasValidFlags() = %v, want %v", got, tc.valid)
+			}
+		})
+	}
+}
+
 func TestAcctRequestFlagMethods(t *testing.T) {
 	t.Run("IsStart", func(t *testing.T) {
 		if !(&AcctRequest{Flags: AcctFlagStart}).IsStart() {

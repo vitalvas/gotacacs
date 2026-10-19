@@ -28,6 +28,10 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrSequenceOverflow,
 			ErrMaxPrompts,
 			ErrBadSecret,
+			ErrTooManySessions,
+			ErrNoSecret,
+			ErrInvalidUsername,
+			ErrInvalidText,
 		}
 
 		for _, err := range errs {
@@ -60,6 +64,10 @@ func TestErrorDefinitions(t *testing.T) {
 			ErrSequenceOverflow,
 			ErrMaxPrompts,
 			ErrBadSecret,
+			ErrTooManySessions,
+			ErrNoSecret,
+			ErrInvalidUsername,
+			ErrInvalidText,
 		}
 
 		for i, err1 := range errs {
@@ -132,6 +140,10 @@ func TestErrorMessages(t *testing.T) {
 		{ErrSequenceOverflow, "sequence number overflow"},
 		{ErrMaxPrompts, "maximum prompt count exceeded"},
 		{ErrBadSecret, "bad secret"},
+		{ErrTooManySessions, "too many sessions"},
+		{ErrNoSecret, "no shared secret for non-TLS connection"},
+		{ErrInvalidUsername, "invalid username"},
+		{ErrInvalidText, "invalid text field"},
 	}
 
 	for _, tt := range tests {

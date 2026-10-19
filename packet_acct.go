@@ -64,6 +64,18 @@ func (p *AcctRequest) IsWatchdog() bool {
 	return p.Flags&AcctFlagWatchdog != 0
 }
 
+// HasValidFlags reports whether the accounting flag combination is valid per
+// RFC 8907 Section 7.2 Table 2. Over flags&0xE, only START (0x2), STOP (0x4),
+// WATCHDOG (0x8), and WATCHDOG+START (0xA) are valid; the rest are INVALID.
+func (p *AcctRequest) HasValidFlags() bool {
+	switch p.Flags & (AcctFlagStart | AcctFlagStop | AcctFlagWatchdog) {
+	case AcctFlagStart, AcctFlagStop, AcctFlagWatchdog, AcctFlagWatchdog | AcctFlagStart:
+		return true
+	default:
+		return false
+	}
+}
+
 // MarshalBinary encodes the AcctRequest packet to binary format.
 func (p *AcctRequest) MarshalBinary() ([]byte, error) {
 	userLen := len(p.User)

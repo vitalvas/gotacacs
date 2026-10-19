@@ -492,7 +492,7 @@ func TestServerAcceptErrorClosesActiveConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	server := NewServer(WithServerListener(ln), WithServerReadTimeout(10*time.Second))
+	server := NewServer(WithServerListener(ln), WithServerAllowInsecure(true), WithServerReadTimeout(10*time.Second))
 
 	serveDone := make(chan error, 1)
 	go func() {
@@ -856,8 +856,8 @@ func TestServerAuthentication(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "wronguser", "testpass")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		tv662_1 := reply.IsFail()
 		if !tv662_1 {
@@ -1022,8 +1022,8 @@ func TestServerNoHandler(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAccountingFailed) {
+			t.Fatalf("got %v, want ErrAccountingFailed", err)
 		}
 		tv784_1 := AcctStatusError
 		if reply.Status != tv784_1 {
@@ -1081,10 +1081,15 @@ func TestServerInvalidPacket(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
+		// Cleartext (no secret) connection: the server replies with an ERROR
+		// status for a malformed body. With a shared secret the same input is
+		// indistinguishable from a wrong secret and terminates the connection
+		// (TestServerBadSecretTerminatesConnection). Cleartext requires the
+		// insecure opt-in per RFC 8907 Section 10.5.2.
 		handler := &testHandler{}
 		server := NewServer(
 			WithServerListener(ln),
-			WithServerSecret("testsecret"),
+			WithServerAllowInsecure(true),
 			WithHandler(handler),
 		)
 
@@ -1102,8 +1107,6 @@ func TestServerInvalidPacket(t *testing.T) {
 		}
 		defer conn.Close()
 
-		secret := []byte("testsecret")
-
 		// Send header with invalid body
 		header := &Header{
 			Version:   MajorVersion<<4 | MinorVersionDefault,
@@ -1118,9 +1121,7 @@ func TestServerInvalidPacket(t *testing.T) {
 		conn.Write(headerBuf)
 
 		// Send invalid body
-		body := []byte{0x01, 0x02}
-		obfuscated := Obfuscate(header, secret, body)
-		conn.Write(obfuscated)
+		conn.Write([]byte{0x01, 0x02})
 
 		// Read response
 		respHeaderBuf := make([]byte, HeaderLength)
@@ -1134,8 +1135,6 @@ func TestServerInvalidPacket(t *testing.T) {
 
 		respBody := make([]byte, respHeader.Length)
 		io.ReadFull(conn, respBody)
-
-		respBody = Obfuscate(respHeader, secret, respBody)
 
 		reply := &AuthenReply{}
 		reply.UnmarshalBinary(respBody)
@@ -1277,8 +1276,8 @@ func TestServerHandlerNilReply(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAccountingFailed) {
+			t.Fatalf("got %v, want ErrAccountingFailed", err)
 		}
 		tv994_1 := AcctStatusError
 		if reply.Status != tv994_1 {
@@ -1343,13 +1342,13 @@ func TestServerSessionState(t *testing.T) {
 			},
 			func(client *Client) error {
 				reply, err := client.Authenticate(context.Background(), "testuser", "testpass")
-				if err == nil {
-					tv1044_1 := reply.IsFail()
-					if !tv1044_1 {
-						t.Error("expected true")
-					}
+				if !errors.Is(err, ErrAuthenticationFailed) {
+					return err
 				}
-				return err
+				if !reply.IsFail() {
+					t.Error("expected true")
+				}
+				return nil
 			})
 	})
 
@@ -1383,13 +1382,13 @@ func TestServerSessionState(t *testing.T) {
 			},
 			func(client *Client) error {
 				resp, err := client.Authorize(context.Background(), "testuser", []string{"service=shell"})
-				if err == nil {
-					tv1078_1 := resp.IsFail()
-					if !tv1078_1 {
-						t.Error("expected true")
-					}
+				if !errors.Is(err, ErrAuthorizationDenied) {
+					return err
 				}
-				return err
+				if !resp.IsFail() {
+					t.Error("expected true")
+				}
+				return nil
 			})
 	})
 
@@ -1423,13 +1422,13 @@ func TestServerSessionState(t *testing.T) {
 			},
 			func(client *Client) error {
 				reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{"task_id=1"})
-				if err == nil {
-					tv1112_1 := reply.IsError()
-					if !tv1112_1 {
-						t.Error("expected true")
-					}
+				if !errors.Is(err, ErrAccountingFailed) {
+					return err
 				}
-				return err
+				if !reply.IsError() {
+					t.Error("expected true")
+				}
+				return nil
 			})
 	})
 }
@@ -2004,8 +2003,8 @@ func TestServerNilHandlerResponse(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Accounting(context.Background(), AcctFlagStart, "testuser", []string{})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAccountingFailed) {
+			t.Fatalf("got %v, want ErrAccountingFailed", err)
 		}
 		tv1585_1 := reply.IsError()
 		if !tv1585_1 {
@@ -2075,9 +2074,12 @@ func TestServerInvalidPackets(t *testing.T) {
 			},
 		}
 
+		// Cleartext (no secret) connection: a malformed CONTINUE gets an
+		// ERROR reply. With a shared secret it terminates the connection
+		// as a bad-secret signal (TestServerBadSecretTerminatesConnection).
 		server := NewServer(
 			WithServerListener(ln),
-			WithServerSecret("testsecret"),
+			WithServerAllowInsecure(true),
 			WithAuthenticationHandler(handler),
 		)
 
@@ -2092,7 +2094,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		}
 		defer conn.Close()
 
-		secret := []byte("testsecret")
+		var secret []byte // cleartext: Obfuscate is a no-op
 
 		// First send a valid START packet to get a session going
 		start := &AuthenStart{
@@ -2234,9 +2236,11 @@ func TestServerInvalidPackets(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
+		// Cleartext (no secret): malformed bodies get an ERROR reply instead
+		// of the bad-secret connection termination.
 		server := NewServer(
 			WithServerListener(ln),
-			WithServerSecret("testsecret"),
+			WithServerAllowInsecure(true),
 			WithHandler(&testHandler{}),
 		)
 
@@ -2244,8 +2248,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		secret := []byte("testsecret")
-		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAuthor, secret)
+		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAuthor, nil)
 
 		resp := &AuthorResponse{}
 		resp.UnmarshalBinary(respBody)
@@ -2262,9 +2265,11 @@ func TestServerInvalidPackets(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
+		// Cleartext (no secret): malformed bodies get an ERROR reply instead
+		// of the bad-secret connection termination.
 		server := NewServer(
 			WithServerListener(ln),
-			WithServerSecret("testsecret"),
+			WithServerAllowInsecure(true),
 			WithHandler(&testHandler{}),
 		)
 
@@ -2272,8 +2277,7 @@ func TestServerInvalidPackets(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		secret := []byte("testsecret")
-		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAcct, secret)
+		respBody := sendInvalidPacketAndGetResponse(t, ln.Addr().String(), PacketTypeAcct, nil)
 
 		reply := &AcctReply{}
 		reply.UnmarshalBinary(respBody)
@@ -3142,8 +3146,7 @@ func TestServerHooks(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		var badSecretCalled bool
-		var badSecretRemote net.Addr
+		badSecretCh := make(chan BadSecretEvent, 1)
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3151,8 +3154,10 @@ func TestServerHooks(t *testing.T) {
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnBadSecret: func(event BadSecretEvent) {
-					badSecretCalled = true
-					badSecretRemote = event.RemoteAddr
+					select {
+					case badSecretCh <- event:
+					default:
+					}
 				},
 			}),
 		)
@@ -3164,12 +3169,13 @@ func TestServerHooks(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
-		time.Sleep(50 * time.Millisecond)
-		if !badSecretCalled {
-			t.Error("expected true")
-		}
-		if badSecretRemote == nil {
-			t.Error("expected non-nil")
+		select {
+		case event := <-badSecretCh:
+			if event.RemoteAddr == nil {
+				t.Error("expected non-nil")
+			}
+		case <-time.After(time.Second):
+			t.Error("expected OnBadSecret hook to fire")
 		}
 	})
 
@@ -3179,7 +3185,7 @@ func TestServerHooks(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		var badSecretCalled bool
+		badSecretCh := make(chan struct{}, 1)
 
 		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
 			secrets := []string{"secret1", "secret2"}
@@ -3195,7 +3201,10 @@ func TestServerHooks(t *testing.T) {
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnBadSecret: func(_ BadSecretEvent) {
-					badSecretCalled = true
+					select {
+					case badSecretCh <- struct{}{}:
+					default:
+					}
 				},
 			}),
 		)
@@ -3208,9 +3217,10 @@ func TestServerHooks(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("wrongsecret"))
 		_, _ = client.Authenticate(context.Background(), "testuser", "password")
 
-		time.Sleep(50 * time.Millisecond)
-		if !badSecretCalled {
-			t.Error("expected true")
+		select {
+		case <-badSecretCh:
+		case <-time.After(time.Second):
+			t.Error("expected OnBadSecret hook to fire")
 		}
 	})
 
@@ -3220,8 +3230,7 @@ func TestServerHooks(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		var packetErrorCalled bool
-		var packetErr error
+		packetErrorCh := make(chan PacketErrorEvent, 1)
 
 		server := NewServer(
 			WithServerListener(ln),
@@ -3229,8 +3238,10 @@ func TestServerHooks(t *testing.T) {
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnPacketError: func(event PacketErrorEvent) {
-					packetErrorCalled = true
-					packetErr = event.Err
+					select {
+					case packetErrorCh <- event:
+					default:
+					}
 				},
 			}),
 		)
@@ -3246,30 +3257,29 @@ func TestServerHooks(t *testing.T) {
 		}
 		defer conn.Close()
 
-		secret := []byte("testsecret")
+		// A body length over the server limit is rejected as a protocol
+		// error before any body is read, firing OnPacketError.
 		header := &Header{
 			Version:   0xc0,
 			Type:      PacketTypeAuthen,
 			SeqNo:     1,
 			SessionID: 12345,
-			Length:    2,
+			Length:    DefaultMaxBodyLength + 1,
 		}
-		body := []byte{0x01, 0x02}
-		obfuscated := Obfuscate(header, secret, body)
 		headerData, _ := header.MarshalBinary()
 		conn.Write(headerData)
-		conn.Write(obfuscated)
 
-		// Read error response
+		// Server closes the connection on the protocol error.
 		respHeaderBuf := make([]byte, HeaderLength)
 		io.ReadFull(conn, respHeaderBuf)
 
-		time.Sleep(50 * time.Millisecond)
-		if !packetErrorCalled {
-			t.Error("expected true")
-		}
-		if packetErr == nil {
-			t.Error("expected non-nil")
+		select {
+		case event := <-packetErrorCh:
+			if event.Err == nil {
+				t.Error("expected non-nil")
+			}
+		case <-time.After(time.Second):
+			t.Error("expected OnPacketError hook to fire")
 		}
 	})
 
@@ -3408,8 +3418,8 @@ func TestServerMiddleware(t *testing.T) {
 
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("testsecret"))
 		reply, err := client.Authenticate(context.Background(), "testuser", "password")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		tv2713_1 := reply.IsFail()
 		if !tv2713_1 {
@@ -4231,7 +4241,7 @@ func TestReadRawPacketErrors(t *testing.T) {
 			clientConn.Close()
 		}()
 
-		_, _, err := server.readRawPacket(serverConn, false, false)
+		_, _, err := server.readRawPacket(serverConn, false)
 		if err == nil {
 			t.Error("expected an error")
 		}
@@ -4260,7 +4270,7 @@ func TestReadRawPacketErrors(t *testing.T) {
 			clientConn.Close()
 		}()
 
-		_, _, err := server.readRawPacket(serverConn, false, false)
+		_, _, err := server.readRawPacket(serverConn, false)
 		if err == nil {
 			t.Error("expected an error")
 		}
@@ -4287,16 +4297,19 @@ func TestReadRawPacketErrors(t *testing.T) {
 			clientConn.Close()
 		}()
 
-		_, _, err := server.readRawPacket(serverConn, false, true) // isTLS=true
+		header, _, err := server.readRawPacket(serverConn, true) // isTLS=true
 		if err == nil {
 			t.Fatal("expected an error")
 		}
-		if !errors.Is(err, ErrInvalidPacket) {
-			t.Errorf("error %v is not %v", err, ErrInvalidPacket)
+		if !errors.Is(err, errTLSUnencryptedFlagMissing) {
+			t.Errorf("error %v is not errTLSUnencryptedFlagMissing", err)
 		}
-		tv3449_1 := err.Error()
-		if !strings.Contains(tv3449_1, "RFC 9887") {
-			t.Errorf("%q does not contain %q", tv3449_1, "RFC 9887")
+		// The header is returned so serveConn can build the STATUS_ERROR reply.
+		if header == nil {
+			t.Error("expected the parsed header to be returned for the error reply")
+		}
+		if !strings.Contains(err.Error(), "RFC 9887") {
+			t.Errorf("%q does not contain %q", err.Error(), "RFC 9887")
 		}
 	})
 }
@@ -4531,13 +4544,16 @@ func TestSecretRotationReadError(t *testing.T) {
 }
 
 func TestResolveSecretAllFailFallback(t *testing.T) {
-	t.Run("all secrets fail returns body deobfuscated with first secret", func(t *testing.T) {
-		var badSecretCalled bool
+	t.Run("all secrets fail returns error and fires hook", func(t *testing.T) {
+		badSecretCh := make(chan struct{}, 1)
 		server := NewServer(
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnBadSecret: func(_ BadSecretEvent) {
-					badSecretCalled = true
+					select {
+					case badSecretCh <- struct{}{}:
+					default:
+					}
 				},
 			}),
 		)
@@ -4588,21 +4604,21 @@ func TestResolveSecretAllFailFallback(t *testing.T) {
 			},
 		}
 
-		result := server.resolveSecret(context.Background(), header, rawBody, cs)
-		if result == nil {
-			t.Error("expected non-nil")
+		result, err := server.resolveSecret(context.Background(), header, rawBody, cs)
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("got %v, want ErrBadSecret", err)
 		}
-		if !badSecretCalled {
-			t.Error("expected true")
+		if result != nil {
+			t.Error("expected nil body on exhausted rotation")
 		}
-		// Result should be deobfuscated with first secret (garbage, but not nil)
-		tv3724_1 := Obfuscate(header, []byte("secret1"), rawBody)
-		if !bytes.Equal(result, tv3724_1) {
-			t.Errorf("got %v, want %v", result, tv3724_1)
+		select {
+		case <-badSecretCh:
+		default:
+			t.Error("expected OnBadSecret hook to fire")
 		}
 	})
 
-	t.Run("all secrets fail with empty secret returns raw body", func(t *testing.T) {
+	t.Run("all secrets fail with empty secret returns error", func(t *testing.T) {
 		server := NewServer(
 			WithHandler(&testHandler{}),
 		)
@@ -4629,8 +4645,7 @@ func TestResolveSecretAllFailFallback(t *testing.T) {
 		clientSecret := []byte("clientsecret")
 		rawBody := Obfuscate(header, clientSecret, validBody)
 
-		// Both provider secrets will fail. First secret is empty,
-		// so the fallback path at L914 should return rawBody.
+		// Both provider secrets fail, so resolveSecret reports ErrBadSecret.
 		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
 			if req.Attempt == 0 {
 				return SecretResponse{
@@ -4657,10 +4672,12 @@ func TestResolveSecretAllFailFallback(t *testing.T) {
 			},
 		}
 
-		result := server.resolveSecret(context.Background(), header, rawBody, cs)
-		// With empty first secret and len(cs.secret)==0, the fallback returns rawBody
-		if !bytes.Equal(result, rawBody) {
-			t.Errorf("got %v, want %v", result, rawBody)
+		result, err := server.resolveSecret(context.Background(), header, rawBody, cs)
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("got %v, want ErrBadSecret", err)
+		}
+		if result != nil {
+			t.Error("expected nil body on exhausted rotation")
 		}
 	})
 }
@@ -4750,7 +4767,7 @@ func TestHandleConnectionShutdownDuringLoop(t *testing.T) {
 }
 
 func TestHandleConnectionInvalidPacketType(t *testing.T) {
-	t.Run("invalid packet type closes connection", func(t *testing.T) {
+	t.Run("invalid packet type gets Section 3.6 reply then closes", func(t *testing.T) {
 		ln, err := ListenTCP("127.0.0.1:0")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -4786,12 +4803,23 @@ func TestHandleConnectionInvalidPacketType(t *testing.T) {
 
 		conn.Write(headerData)
 
-		// Server should close connection due to header validation failure
-		buf := make([]byte, 1)
+		// RFC 8907 Section 3.6: identical header, seq_no+1, length 0.
 		conn.SetReadDeadline(time.Now().Add(time.Second))
-		_, err = conn.Read(buf)
-		if err == nil {
-			t.Error("expected an error")
+		replyBuf := make([]byte, HeaderLength)
+		if _, err := io.ReadFull(conn, replyBuf); err != nil {
+			t.Fatalf("expected a Section 3.6 reply, got %v", err)
+		}
+		reply := &Header{}
+		if err := reply.UnmarshalBinary(replyBuf); err != nil {
+			t.Fatal(err)
+		}
+		if reply.SeqNo != 2 || reply.Length != 0 || reply.SessionID != 12345 || byte(reply.Type) != 0xFF {
+			t.Errorf("unexpected reply header %+v", reply)
+		}
+
+		// Then the connection closes.
+		if _, err := conn.Read(make([]byte, 1)); err == nil {
+			t.Error("expected the connection to close after the error reply")
 		}
 	})
 }
@@ -5042,14 +5070,17 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		var badSecretCalled bool
+		badSecretCh := make(chan struct{}, 1)
 		server := NewServer(
 			WithServerListener(ln),
 			WithServerSecret("serversecret"),
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnBadSecret: func(_ BadSecretEvent) {
-					badSecretCalled = true
+					select {
+					case badSecretCh <- struct{}{}:
+					default:
+					}
 				},
 			}),
 		)
@@ -5059,7 +5090,6 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Send authorization packet with wrong secret
-		secret := []byte("serversecret")
 		wrongSecret := []byte("wrongsecret")
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
@@ -5094,30 +5124,16 @@ func TestHandleAuthorPacketBadSecret(t *testing.T) {
 		conn.Write(headerData)
 		conn.Write(obfuscatedBody)
 
-		// Read error response (server uses its own secret to deobfuscate, gets garbage)
-		respHeaderBuf := make([]byte, HeaderLength)
-		_, err = io.ReadFull(conn, respHeaderBuf)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		// RFC 8907 Section 10.5.2: the server terminates the connection
+		// without replying once the bad secret is detected.
+		if _, err := io.ReadFull(conn, make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("expected connection closed with no reply, got %v", err)
 		}
 
-		respHeader := &Header{}
-		respHeader.UnmarshalBinary(respHeaderBuf)
-
-		respBody := make([]byte, respHeader.Length)
-		io.ReadFull(conn, respBody)
-		respBody = Obfuscate(respHeader, secret, respBody)
-
-		resp := &AuthorResponse{}
-		resp.UnmarshalBinary(respBody)
-		tv4183_1 := AuthorStatusError
-		if resp.Status != tv4183_1 {
-			t.Errorf("got %v, want %v", resp.Status, tv4183_1)
-		}
-
-		time.Sleep(50 * time.Millisecond)
-		if !badSecretCalled {
-			t.Error("expected true")
+		select {
+		case <-badSecretCh:
+		case <-time.After(time.Second):
+			t.Error("expected OnBadSecret hook to fire")
 		}
 	})
 }
@@ -5129,14 +5145,17 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		var badSecretCalled bool
+		badSecretCh := make(chan struct{}, 1)
 		server := NewServer(
 			WithServerListener(ln),
 			WithServerSecret("serversecret"),
 			WithHandler(&testHandler{}),
 			WithServerHooks(ServerHooks{
 				OnBadSecret: func(_ BadSecretEvent) {
-					badSecretCalled = true
+					select {
+					case badSecretCh <- struct{}{}:
+					default:
+					}
 				},
 			}),
 		)
@@ -5145,7 +5164,6 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		secret := []byte("serversecret")
 		wrongSecret := []byte("wrongsecret")
 
 		conn, err := net.Dial("tcp", ln.Addr().String())
@@ -5179,29 +5197,16 @@ func TestHandleAcctPacketBadSecret(t *testing.T) {
 		conn.Write(headerData)
 		conn.Write(obfuscatedBody)
 
-		respHeaderBuf := make([]byte, HeaderLength)
-		_, err = io.ReadFull(conn, respHeaderBuf)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		// RFC 8907 Section 10.5.2: the server terminates the connection
+		// without replying once the bad secret is detected.
+		if _, err := io.ReadFull(conn, make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("expected connection closed with no reply, got %v", err)
 		}
 
-		respHeader := &Header{}
-		respHeader.UnmarshalBinary(respHeaderBuf)
-
-		respBody := make([]byte, respHeader.Length)
-		io.ReadFull(conn, respBody)
-		respBody = Obfuscate(respHeader, secret, respBody)
-
-		reply := &AcctReply{}
-		reply.UnmarshalBinary(respBody)
-		tv4256_1 := AcctStatusError
-		if reply.Status != tv4256_1 {
-			t.Errorf("got %v, want %v", reply.Status, tv4256_1)
-		}
-
-		time.Sleep(50 * time.Millisecond)
-		if !badSecretCalled {
-			t.Error("expected true")
+		select {
+		case <-badSecretCh:
+		case <-time.After(time.Second):
+			t.Error("expected OnBadSecret hook to fire")
 		}
 	})
 }
@@ -5283,7 +5288,10 @@ func TestSecretRotationRetriesLengthErrors(t *testing.T) {
 		t.Fatalf("fixture must produce a length error outside the bad-secret heuristic: %v", err)
 	}
 	cs := &connState{secret: wrong, totalAttempts: 2}
-	got := server.resolveSecret(context.Background(), header, raw, cs)
+	got, err := server.resolveSecret(context.Background(), header, raw, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(got, body) || !bytes.Equal(cs.secret, correct) {
 		t.Error("rotation stopped before trying the correct secret")
 	}
@@ -5292,7 +5300,7 @@ func TestSecretRotationRetriesLengthErrors(t *testing.T) {
 func TestServerSingleConnectNegotiationIsFixed(t *testing.T) {
 	for _, accepted := range []bool{false, true} {
 		t.Run(fmt.Sprint("accepted=", accepted), func(t *testing.T) {
-			server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+			server := NewServer(WithServerAllowInsecure(true), WithAuthenticationHandler(&multiStepHandler{
 				onStart: func(context.Context, *AuthenRequest) *AuthenReply {
 					return &AuthenReply{Status: AuthenStatusGetPass}
 				},
@@ -5347,7 +5355,7 @@ func TestServerSingleConnectNegotiationIsFixed(t *testing.T) {
 
 func TestServerAbortHasNoReply(t *testing.T) {
 	var aborted atomic.Bool
-	server := NewServer(WithAuthenticationHandler(&multiStepHandler{
+	server := NewServer(WithServerAllowInsecure(true), WithAuthenticationHandler(&multiStepHandler{
 		onStart: func(context.Context, *AuthenRequest) *AuthenReply {
 			return &AuthenReply{Status: AuthenStatusGetPass}
 		},
@@ -5814,7 +5822,7 @@ func TestServeStartsAfterServeConn(t *testing.T) {
 }
 
 func TestServeConnCleanClose(t *testing.T) {
-	server := NewServer()
+	server := NewServer(WithServerAllowInsecure(true))
 	serverConn, clientConn := net.Pipe()
 	clientConn.Close()
 
@@ -6114,5 +6122,679 @@ func TestServeShutdownAcceptErrorConcurrent(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("Serve did not return")
 		}
+	}
+}
+
+func TestServerBadSecretTerminatesConnection(t *testing.T) {
+	// RFC 8907 section 10.5.2: once an invalid shared secret is detected the
+	// server must not accept new sessions on the connection. Replying is also
+	// forbidden by the fix: an error reply obfuscated with the real secret
+	// hands the peer a known-plaintext pseudo-pad sample.
+	run := func(t *testing.T, opts []ServerOption, clientSecret []byte) (error, bool) {
+		t.Helper()
+		var badSecret atomic.Bool
+		opts = append(opts,
+			WithServerHooks(ServerHooks{
+				OnBadSecret: func(BadSecretEvent) { badSecret.Store(true) },
+			}),
+			WithAuthenticationHandler(&multiStepHandler{
+				onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+					return &AuthenReply{Status: AuthenStatusPass}
+				},
+			}),
+		)
+		server := NewServer(opts...)
+		peer, conn := net.Pipe()
+		done := make(chan error, 1)
+		go func() { done <- server.ServeConn(peer) }()
+		defer func() {
+			conn.Close()
+			peer.Close()
+		}()
+		conn.SetDeadline(time.Now().Add(time.Second))
+		header := NewHeader(PacketTypeAuthen, 42)
+		header.SetSingleConnect(true)
+		body, err := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		header.Length = uint32(len(body))
+		if err := server.writePacket(conn, header, body, clientSecret, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(conn, make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("expected connection closed with no reply, got %v", err)
+		}
+		return <-done, badSecret.Load()
+	}
+
+	t.Run("wrong secret closes single-connect connection without reply", func(t *testing.T) {
+		err, hookFired := run(t, []ServerOption{WithServerSecret("serversecret")}, []byte("wrongsecret"))
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("got %v, want ErrBadSecret", err)
+		}
+		if !hookFired {
+			t.Error("expected OnBadSecret hook to fire")
+		}
+	})
+
+	t.Run("rotation exhaustion closes connection without reply", func(t *testing.T) {
+		provider := SecretProviderFunc(func(_ context.Context, req SecretRequest) SecretResponse {
+			secrets := []string{"secret1", "secret2"}
+			return SecretResponse{Secret: []byte(secrets[req.Attempt]), Attempts: len(secrets)}
+		})
+		err, hookFired := run(t, []ServerOption{WithSecretProvider(provider)}, []byte("wrongsecret"))
+		if !errors.Is(err, ErrBadSecret) {
+			t.Errorf("got %v, want ErrBadSecret", err)
+		}
+		if !hookFired {
+			t.Error("expected OnBadSecret hook to fire")
+		}
+	})
+}
+
+func TestServerMaxSessionsPerConn(t *testing.T) {
+	newInteractiveServer := func(limit int, status AuthenStatus) *Server {
+		return NewServer(
+			WithServerAllowInsecure(true),
+			WithServerMaxSessionsPerConn(limit),
+			WithAuthenticationHandler(&multiStepHandler{
+				onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+					return &AuthenReply{Status: status}
+				},
+			}),
+		)
+	}
+
+	startSession := func(t *testing.T, server *Server, conn net.Conn, sessionID uint32) error {
+		t.Helper()
+		header := NewHeader(PacketTypeAuthen, sessionID)
+		header.SetSingleConnect(true)
+		body, err := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		header.Length = uint32(len(body))
+		if err := server.writePacket(conn, header, body, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = server.readPacket(conn, nil, false)
+		return err
+	}
+
+	t.Run("default applied", func(t *testing.T) {
+		if got := NewServer().maxSessionsPerConn; got != DefaultMaxSessionsPerConn {
+			t.Errorf("got %d, want %d", got, DefaultMaxSessionsPerConn)
+		}
+	})
+
+	t.Run("exceeding the limit terminates the connection", func(t *testing.T) {
+		// GetPass parks every session in the active state so nothing is
+		// cleaned up and the limit is reached by abandoned sessions.
+		server := newInteractiveServer(2, AuthenStatusGetPass)
+		peer, conn := net.Pipe()
+		done := make(chan error, 1)
+		go func() { done <- server.ServeConn(peer) }()
+		defer func() {
+			conn.Close()
+			peer.Close()
+		}()
+		conn.SetDeadline(time.Now().Add(time.Second))
+		for _, sessionID := range []uint32{1, 2} {
+			if err := startSession(t, server, conn, sessionID); err != nil {
+				t.Fatalf("session %d: %v", sessionID, err)
+			}
+		}
+		if err := startSession(t, server, conn, 3); !errors.Is(err, io.EOF) {
+			t.Fatalf("expected connection closed with no reply, got %v", err)
+		}
+		if err := <-done; !errors.Is(err, ErrTooManySessions) {
+			t.Errorf("got %v, want ErrTooManySessions", err)
+		}
+	})
+
+	t.Run("completed sessions free capacity", func(t *testing.T) {
+		// Pass completes each session immediately, so sequential sessions
+		// never exceed a limit of one.
+		server := newInteractiveServer(1, AuthenStatusPass)
+		peer, conn := net.Pipe()
+		done := make(chan error, 1)
+		go func() { done <- server.ServeConn(peer) }()
+		defer func() {
+			conn.Close()
+			peer.Close()
+			<-done
+		}()
+		conn.SetDeadline(time.Now().Add(time.Second))
+		for _, sessionID := range []uint32{1, 2, 3} {
+			if err := startSession(t, server, conn, sessionID); err != nil {
+				t.Fatalf("session %d: %v", sessionID, err)
+			}
+		}
+	})
+}
+
+func TestServerRejectsInvalidAcctFlags(t *testing.T) {
+	// RFC 8907 Section 7.2: the server MUST answer an INVALID accounting flag
+	// combination with ACCT_STATUS_ERROR, without invoking the handler.
+	handlerCalled := make(chan struct{}, 1)
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAccountingHandler(AcctHandlerFunc(func(context.Context, *AcctRequestContext) *AcctReply {
+			handlerCalled <- struct{}{}
+			return &AcctReply{Status: AcctStatusSuccess}
+		})),
+	)
+
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAcct, 42)
+	// START+STOP is INVALID per Table 2.
+	body, err := (&AcctRequest{Flags: AcctFlagStart | AcctFlagStop, User: []byte("u")}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	replyHeader, replyBody, err := server.readPacket(conn, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replyHeader.Type != PacketTypeAcct {
+		t.Fatalf("got type %d, want acct", replyHeader.Type)
+	}
+	reply := &AcctReply{}
+	if err := reply.UnmarshalBinary(replyBody); err != nil {
+		t.Fatal(err)
+	}
+	if !reply.IsError() {
+		t.Errorf("got status %d, want ACCT_STATUS_ERROR", reply.Status)
+	}
+	select {
+	case <-handlerCalled:
+		t.Error("handler must not be called for an invalid flag combination")
+	default:
+	}
+}
+
+func TestServerRejectsInsecureByDefault(t *testing.T) {
+	// RFC 8907 Section 10.5.2: a non-TLS connection with no shared secret runs
+	// cleartext AAA and MUST be rejected by default.
+	server := NewServer(WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+		return &AuthenReply{Status: AuthenStatusPass}
+	})))
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+	}()
+
+	// The server rejects the connection before reading any packet, so the
+	// client observes EOF on its next read and ServeConn returns ErrNoSecret.
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected connection closed with no reply, got %v", err)
+	}
+	if err := <-done; !errors.Is(err, ErrNoSecret) {
+		t.Errorf("got %v, want ErrNoSecret", err)
+	}
+}
+
+func TestServerAllowInsecureOptIn(t *testing.T) {
+	// WithServerAllowInsecure lets a non-TLS secretless server run cleartext.
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	reply, _, err := server.readPacket(conn, nil, false)
+	if err != nil {
+		t.Fatalf("cleartext server rejected opt-in connection: %v", err)
+	}
+	if reply.Type != PacketTypeAuthen {
+		t.Errorf("got type %d, want authen", reply.Type)
+	}
+}
+
+func TestServerRestrictAuthenTypes(t *testing.T) {
+	// RFC 8907 Section 10.5.3: the server must be able to restrict
+	// authentication to challenge/response types. A disallowed START is
+	// refused before the handler runs.
+	handlerCalled := make(chan struct{}, 1)
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithServerAllowedAuthenTypes(AuthenTypeCHAP, AuthenTypeMSCHAPV2),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			handlerCalled <- struct{}{}
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	body, _ := (&AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("u"), Data: []byte("p")}).MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	_, replyBody, err := server.readPacket(conn, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := &AuthenReply{}
+	if err := reply.UnmarshalBinary(replyBody); err != nil {
+		t.Fatal(err)
+	}
+	if !reply.IsFail() {
+		t.Errorf("got status %d, want FAIL for disallowed authen type", reply.Status)
+	}
+	select {
+	case <-handlerCalled:
+		t.Error("handler must not run for a disallowed authen type")
+	default:
+	}
+}
+
+func TestServerRefusesSingleConnect(t *testing.T) {
+	// RFC 8907 Section 4.3: the server MAY refuse single-connect. With it
+	// disabled the reply must not echo the flag and the connection closes
+	// after the session completes.
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithServerSingleConnect(false),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	header.SetSingleConnect(true)
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	reply, _, err := server.readPacket(conn, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.IsSingleConnect() {
+		t.Error("server echoed single-connect while refusing it")
+	}
+	// Connection must close after the single session.
+	if _, _, err := server.readPacket(conn, nil, false); err == nil {
+		t.Error("connection stayed open after a refused single-connect session")
+	}
+}
+
+func TestServerTLSMissingUnencryptedFlagReplies(t *testing.T) {
+	// RFC 9887 Section 4: a TLS packet without the unencrypted flag MUST get a
+	// STATUS_ERROR reply (flag set) before the connection terminates.
+	serverCert, err := generateTestCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := ListenTLS("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{serverCert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(
+		WithServerListener(ln),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	go func() { server.Serve() }()
+	defer server.Shutdown(context.Background())
+	time.Sleep(50 * time.Millisecond)
+
+	tlsClient, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}) //nolint:gosec // test-only loopback
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tlsClient.Close()
+
+	tlsClient.SetDeadline(time.Now().Add(2 * time.Second))
+	// Send a packet WITHOUT the unencrypted flag over TLS (noncompliant).
+	header := NewHeader(PacketTypeAuthen, 42)
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+	header.Length = uint32(len(body))
+	headerData, _ := header.MarshalBinary()
+	if _, err := tlsClient.Write(headerData); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tlsClient.Write(body); err != nil {
+		t.Fatal(err)
+	}
+
+	replyHeaderBuf := make([]byte, HeaderLength)
+	if _, err := io.ReadFull(tlsClient, replyHeaderBuf); err != nil {
+		t.Fatalf("expected a STATUS_ERROR reply, got %v", err)
+	}
+	replyHeader := &Header{}
+	if err := replyHeader.UnmarshalBinary(replyHeaderBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !replyHeader.IsUnencrypted() {
+		t.Error("RFC 9887 requires the error reply to set the unencrypted flag")
+	}
+	replyBody := make([]byte, replyHeader.Length)
+	io.ReadFull(tlsClient, replyBody)
+	reply := &AuthenReply{}
+	if err := reply.UnmarshalBinary(replyBody); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Status != AuthenStatusError {
+		t.Errorf("got status %d, want AUTHEN_STATUS_ERROR", reply.Status)
+	}
+}
+
+func TestServerDropsUnencryptedFlagWithoutSecret(t *testing.T) {
+	// RFC 8907 4.5: "A request MUST be dropped if TAC_PLUS_UNENCRYPTED_FLAG is
+	// set to true." This holds even on the AllowInsecure (no-secret) path.
+	handlerCalled := make(chan struct{}, 1)
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			handlerCalled <- struct{}{}
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	header.SetUnencrypted(true) // cleartext-flagged request
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "user").MarshalBinary()
+	header.Length = uint32(len(body))
+	headerData, _ := header.MarshalBinary()
+	go func() {
+		conn.Write(headerData)
+		conn.Write(body)
+	}()
+
+	if _, err := io.ReadFull(conn, make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected the connection dropped with no reply, got %v", err)
+	}
+	select {
+	case <-handlerCalled:
+		t.Error("handler must not run for a cleartext-flagged request")
+	default:
+	}
+}
+
+func TestServerValidatesInboundUsername(t *testing.T) {
+	// RFC 8907 3.7: usernames must satisfy the RFC 8265 profile. A username
+	// with a control character is rejected before the handler runs.
+	handlerCalled := make(chan struct{}, 1)
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			handlerCalled <- struct{}{}
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	start := &AuthenStart{Action: AuthenActionLogin, AuthenType: AuthenTypePAP, Service: AuthenServiceLogin, User: []byte("ad\x00min"), Data: []byte("p")}
+	body, _ := start.MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	_, replyBody, err := server.readPacket(conn, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := &AuthenReply{}
+	if err := reply.UnmarshalBinary(replyBody); err != nil {
+		t.Fatal(err)
+	}
+	if !reply.IsError() {
+		t.Errorf("got status %d, want ERROR for an invalid username", reply.Status)
+	}
+	select {
+	case <-handlerCalled:
+		t.Error("handler must not run for an invalid username")
+	default:
+	}
+}
+
+func TestServerLimitsGetUserRetries(t *testing.T) {
+	// RFC 8907 5.4.2.1: the server MUST limit username re-prompt retries.
+	// A handler that loops on GETUSER is cut off with FAIL after the cap.
+	var continues atomic.Int32
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithServerMaxAuthenRetries(3),
+		WithAuthenticationHandler(&multiStepHandler{
+			onStart: func(context.Context, *AuthenRequest) *AuthenReply {
+				return &AuthenReply{Status: AuthenStatusGetUser, ServerMsg: []byte("User:")}
+			},
+			onContinue: func(context.Context, *AuthenContinueRequest) *AuthenReply {
+				continues.Add(1)
+				return &AuthenReply{Status: AuthenStatusGetUser, ServerMsg: []byte("User:")}
+			},
+		}),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	header := NewHeader(PacketTypeAuthen, 42)
+	body, _ := NewAuthenStart(AuthenActionLogin, AuthenTypeASCII, AuthenServiceLogin, "").MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// START -> GETUSER (retry 0). Keep answering CONTINUE; the server must
+	// eventually stop re-prompting and send a terminal FAIL.
+	lastStatus := AuthenStatusGetUser
+	for i := 0; i < 10; i++ {
+		_, replyBody, err := server.readPacket(conn, nil, false)
+		if err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		r := &AuthenReply{}
+		if err := r.UnmarshalBinary(replyBody); err != nil {
+			t.Fatal(err)
+		}
+		lastStatus = r.Status
+		if r.Status != AuthenStatusGetUser {
+			break
+		}
+		header.SeqNo += 2
+		cont, _ := (&AuthenContinue{UserMsg: []byte("u")}).MarshalBinary()
+		header.Length = uint32(len(cont))
+		if err := server.writePacket(conn, header, cont, nil, false); err != nil {
+			// Server may have closed after FAIL; acceptable.
+			break
+		}
+	}
+	if lastStatus != AuthenStatusFail {
+		t.Errorf("last status = %d, want FAIL after retry cap", lastStatus)
+	}
+	if got := continues.Load(); got > 3 {
+		t.Errorf("handler got %d CONTINUE calls, want <= 3 (retry cap)", got)
+	}
+}
+
+func TestServerIgnoresWatchdogArgsWithoutStart(t *testing.T) {
+	// RFC 8907 7.2: for a WATCHDOG record without START, "servers MUST ignore
+	// any arguments". The handler must see no args.
+	gotArgs := make(chan int, 1)
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAccountingHandler(AcctHandlerFunc(func(_ context.Context, req *AcctRequestContext) *AcctReply {
+			gotArgs <- len(req.Request.RawArgs)
+			return &AcctReply{Status: AcctStatusSuccess}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	header := NewHeader(PacketTypeAcct, 42)
+	req := &AcctRequest{Flags: AcctFlagWatchdog, User: []byte("u"), RawArgs: [][]byte{[]byte("task_id=1"), []byte("bytes=99")}}
+	body, _ := req.MarshalBinary()
+	header.Length = uint32(len(body))
+	if err := server.writePacket(conn, header, body, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.readPacket(conn, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := <-gotArgs; n != 0 {
+		t.Errorf("handler saw %d args on WATCHDOG-without-START, want 0", n)
+	}
+}
+
+func TestServerUnknownPacketTypeReply(t *testing.T) {
+	// RFC 8907 Section 3.6: when the packet type cannot be determined, the
+	// server MUST return a packet with the identical cleartext header, the
+	// sequence number incremented by one, and the length set to zero.
+	server := NewServer(
+		WithServerAllowInsecure(true),
+		WithAuthenticationHandler(AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusPass}
+		})),
+	)
+	peer, conn := net.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- server.ServeConn(peer) }()
+	defer func() {
+		conn.Close()
+		peer.Close()
+		<-done
+	}()
+
+	conn.SetDeadline(time.Now().Add(time.Second))
+	// Build a header with an undefined packet type (0x7f) and some body. The
+	// server rejects on the header type before reading the body, so the writes
+	// run in a goroutine while the main goroutine reads the reply (net.Pipe is
+	// synchronous).
+	header := &Header{
+		Version:   MajorVersion<<4 | MinorVersionDefault,
+		Type:      PacketType(0x7f),
+		SeqNo:     1,
+		SessionID: 0xABCD1234,
+		Length:    4,
+	}
+	headerData, _ := header.MarshalBinary()
+	go func() {
+		conn.Write(headerData)
+		conn.Write([]byte{0x01, 0x02, 0x03, 0x04})
+	}()
+
+	replyBuf := make([]byte, HeaderLength)
+	if _, err := io.ReadFull(conn, replyBuf); err != nil {
+		t.Fatalf("expected a Section 3.6 error reply, got %v", err)
+	}
+	reply := &Header{}
+	if err := reply.UnmarshalBinary(replyBuf); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Version != header.Version || reply.Type != header.Type || reply.SessionID != header.SessionID {
+		t.Errorf("reply header %+v is not identical to request header fields", reply)
+	}
+	if reply.SeqNo != header.SeqNo+1 {
+		t.Errorf("reply SeqNo = %d, want %d", reply.SeqNo, header.SeqNo+1)
+	}
+	if reply.Length != 0 {
+		t.Errorf("reply Length = %d, want 0", reply.Length)
+	}
+}
+
+func TestNewComposedHandler(t *testing.T) {
+	h := NewComposedHandler(
+		AuthenHandlerFunc(func(context.Context, *AuthenRequest) *AuthenReply {
+			return &AuthenReply{Status: AuthenStatusPass}
+		}),
+		nil,
+		nil,
+	)
+	if reply := h.HandleAuthenStart(context.Background(), &AuthenRequest{}); !reply.IsPass() {
+		t.Error("authen handler was not delegated")
+	}
+	if resp := h.HandleAuthorRequest(context.Background(), &AuthorRequestContext{}); resp.Status != AuthorStatusError {
+		t.Error("nil author handler must return an error response")
+	}
+	if reply := h.HandleAcctRequest(context.Background(), &AcctRequestContext{}); !reply.IsError() {
+		t.Error("nil acct handler must return an error response")
 	}
 }

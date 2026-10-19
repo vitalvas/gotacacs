@@ -76,6 +76,9 @@ const (
 
 	// AuthenTypeMSCHAPV2 indicates MS-CHAP v2 authentication.
 	AuthenTypeMSCHAPV2 AuthenType = 0x06
+
+	// AuthenTypeNotSet indicates the authentication type was not set.
+	AuthenTypeNotSet AuthenType = 0x00
 )
 
 // AuthenService is a TACACS+ authentication service.
@@ -106,6 +109,9 @@ const (
 
 	// AuthenServiceNASI indicates NASI service.
 	AuthenServiceNASI AuthenService = 0x08
+
+	// AuthenServiceFWProxy indicates firewall proxy service.
+	AuthenServiceFWProxy AuthenService = 0x09
 )
 
 // AuthenStatus is a TACACS+ authentication status code.
@@ -268,3 +274,13 @@ const TLSSessionTicketKeyLength = 32
 // DefaultMaxBodyLength is the default maximum allowed body length (256KB).
 // This prevents memory exhaustion attacks from malicious peers.
 const DefaultMaxBodyLength = 256 * 1024
+
+// DefaultMaxSessionsPerConn is the default maximum number of concurrent
+// sessions on a single connection. This bounds the server memory held by
+// sessions a client opens and never completes.
+const DefaultMaxSessionsPerConn = 64
+
+// DefaultMaxAuthenRetries is the default limit on ASCII username/password
+// re-prompts (GETUSER/GETPASS/GETDATA) the server issues in one authentication
+// session, per the three-attempt recommendation of RFC 8907 Section 5.4.2.1.
+const DefaultMaxAuthenRetries = 3

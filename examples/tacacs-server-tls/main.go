@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"flag"
 	"log"
@@ -77,8 +78,10 @@ func (h *exampleHandler) HandleAuthenStart(_ context.Context, req *gotacacs.Auth
 
 	log.Printf("Authentication: user=%s from=%s", user, req.RemoteAddr)
 
+	// Demo only: real deployments store salted password hashes, not plaintext.
+	// Compare in constant time so a reply cannot leak password-prefix timing.
 	expectedPass, ok := h.users[user]
-	if !ok || password != expectedPass {
+	if !ok || subtle.ConstantTimeCompare([]byte(password), []byte(expectedPass)) != 1 {
 		return &gotacacs.AuthenReply{
 			Status:    gotacacs.AuthenStatusFail,
 			ServerMsg: []byte("Authentication failed"),
@@ -92,7 +95,13 @@ func (h *exampleHandler) HandleAuthenStart(_ context.Context, req *gotacacs.Auth
 }
 
 func (h *exampleHandler) HandleAuthenContinue(_ context.Context, _ *gotacacs.AuthenContinueRequest) *gotacacs.AuthenReply {
-	return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
+	// This example only handles single-step PAP, which never sends CONTINUE.
+	// Returning ERROR here avoids accidentally passing an unverified exchange;
+	// a multi-step handler would track per-session state and validate input.
+	return &gotacacs.AuthenReply{
+		Status:    gotacacs.AuthenStatusError,
+		ServerMsg: []byte("CONTINUE not supported"),
+	}
 }
 
 func (h *exampleHandler) HandleAuthorRequest(_ context.Context, req *gotacacs.AuthorRequestContext) *gotacacs.AuthorResponse {

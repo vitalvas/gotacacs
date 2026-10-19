@@ -205,4 +205,13 @@ func TestMiscConstants(t *testing.T) {
 			t.Errorf("got %v, want %v", got, uint32(256*1024))
 		}
 	})
+
+	t.Run("missing wire constants (RFC 8907 Section 5.1)", func(t *testing.T) {
+		if AuthenServiceFWProxy != 0x09 {
+			t.Errorf("AuthenServiceFWProxy = %#x, want 0x09", AuthenServiceFWProxy)
+		}
+		if AuthenTypeNotSet != 0x00 {
+			t.Errorf("AuthenTypeNotSet = %#x, want 0x00", AuthenTypeNotSet)
+		}
+	})
 }

@@ -207,6 +207,17 @@ type ComposedHandler struct {
 	acct   AccountingHandler
 }
 
+// NewComposedHandler combines individual AAA handlers into a single Handler.
+// A nil handler answers its request type with an error response.
+func NewComposedHandler(authen AuthenticationHandler, author AuthorizationHandler, acct AccountingHandler) *ComposedHandler {
+	return &ComposedHandler{
+		authen: authen,
+		author: author,
+		acct:   acct,
+	}
+}
+
+// HandleAuthenStart implements AuthenticationHandler.
 func (h *ComposedHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequest) *AuthenReply {
 	if h.authen == nil {
 		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
@@ -214,6 +225,7 @@ func (h *ComposedHandler) HandleAuthenStart(ctx context.Context, req *AuthenRequ
 	return h.authen.HandleAuthenStart(ctx, req)
 }
 
+// HandleAuthenContinue implements AuthenticationHandler.
 func (h *ComposedHandler) HandleAuthenContinue(ctx context.Context, req *AuthenContinueRequest) *AuthenReply {
 	if h.authen == nil {
 		return &AuthenReply{Status: AuthenStatusError, ServerMsg: []byte("no authentication handler configured")}
@@ -221,6 +233,7 @@ func (h *ComposedHandler) HandleAuthenContinue(ctx context.Context, req *AuthenC
 	return h.authen.HandleAuthenContinue(ctx, req)
 }
 
+// HandleAuthorRequest implements AuthorizationHandler.
 func (h *ComposedHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRequestContext) *AuthorResponse {
 	if h.author == nil {
 		return &AuthorResponse{Status: AuthorStatusError, ServerMsg: []byte("no authorization handler configured")}
@@ -228,6 +241,7 @@ func (h *ComposedHandler) HandleAuthorRequest(ctx context.Context, req *AuthorRe
 	return h.author.HandleAuthorRequest(ctx, req)
 }
 
+// HandleAcctRequest implements AccountingHandler.
 func (h *ComposedHandler) HandleAcctRequest(ctx context.Context, req *AcctRequestContext) *AcctReply {
 	if h.acct == nil {
 		return &AcctReply{Status: AcctStatusError, ServerMsg: []byte("no accounting handler configured")}
@@ -366,18 +380,23 @@ func WithHandler(handler Handler) ServerOption {
 
 // Server is a TACACS+ server.
 type Server struct {
-	mu             sync.Mutex
-	listener       Listener
-	secretProvider SecretProvider
-	hooks          ServerHooks
-	middlewares    []Middleware
-	readTimeout    time.Duration
-	writeTimeout   time.Duration
-	maxBodyLength  uint32
-	authenHandler  AuthenticationHandler
-	authorHandler  AuthorizationHandler
-	acctHandler    AccountingHandler
-	handler        Handler
+	mu                 sync.Mutex
+	listener           Listener
+	secretProvider     SecretProvider
+	hooks              ServerHooks
+	middlewares        []Middleware
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	maxBodyLength      uint32
+	maxSessionsPerConn int
+	maxAuthenRetries   int
+	allowInsecure      bool
+	allowSingleConnect bool
+	allowedAuthenTypes map[AuthenType]struct{}
+	authenHandler      AuthenticationHandler
+	authorHandler      AuthorizationHandler
+	acctHandler        AccountingHandler
+	handler            Handler
 
 	running        bool
 	serving        bool
@@ -396,9 +415,12 @@ type Server struct {
 // NewServer creates a new TACACS+ server with the given options.
 func NewServer(opts ...ServerOption) *Server {
 	s := &Server{
-		readTimeout:   30 * time.Second,
-		writeTimeout:  30 * time.Second,
-		maxBodyLength: DefaultMaxBodyLength,
+		readTimeout:        30 * time.Second,
+		writeTimeout:       30 * time.Second,
+		maxBodyLength:      DefaultMaxBodyLength,
+		maxSessionsPerConn: DefaultMaxSessionsPerConn,
+		maxAuthenRetries:   DefaultMaxAuthenRetries,
+		allowSingleConnect: true,
 	}
 
 	for _, opt := range opts {
@@ -406,11 +428,7 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	// Build combined handler from individual handlers
-	s.handler = &ComposedHandler{
-		authen: s.authenHandler,
-		author: s.authorHandler,
-		acct:   s.acctHandler,
-	}
+	s.handler = NewComposedHandler(s.authenHandler, s.authorHandler, s.acctHandler)
 
 	// Apply middleware chain (first added = outermost)
 	for i := len(s.middlewares) - 1; i >= 0; i-- {
@@ -424,6 +442,64 @@ func NewServer(opts ...ServerOption) *Server {
 func WithServerMaxBodyLength(maxLength uint32) ServerOption {
 	return func(s *Server) {
 		s.maxBodyLength = maxLength
+	}
+}
+
+// WithServerMaxSessionsPerConn sets the maximum number of concurrent sessions
+// allowed on a single connection. The connection is terminated with
+// ErrTooManySessions when a client would exceed the limit. The value must be
+// at least 1; the default is DefaultMaxSessionsPerConn.
+func WithServerMaxSessionsPerConn(maxSessions int) ServerOption {
+	return func(s *Server) {
+		s.maxSessionsPerConn = maxSessions
+	}
+}
+
+// WithServerMaxAuthenRetries sets the maximum number of interactive re-prompts
+// (GETUSER/GETPASS/GETDATA) the server issues within a single authentication
+// session before terminating it with FAIL, satisfying the RFC 8907
+// Section 5.4.2.1 obligation to limit retries. A value <= 0 disables the cap.
+// The default is DefaultMaxAuthenRetries (3).
+func WithServerMaxAuthenRetries(maxRetries int) ServerOption {
+	return func(s *Server) {
+		s.maxAuthenRetries = maxRetries
+	}
+}
+
+// WithServerAllowInsecure permits non-TLS connections that have no shared
+// secret, which run cleartext AAA. RFC 8907 Section 10.5.2 forbids this, so the
+// server rejects such connections by default; enable it only for testing or
+// trusted-transport deployments.
+func WithServerAllowInsecure(allow bool) ServerOption {
+	return func(s *Server) {
+		s.allowInsecure = allow
+	}
+}
+
+// WithServerSingleConnect controls whether the server accepts a client's
+// single-connection request (RFC 8907 Section 4.3). It defaults to true; set
+// false to refuse single-connect so each connection carries a single session.
+func WithServerSingleConnect(allow bool) ServerOption {
+	return func(s *Server) {
+		s.allowSingleConnect = allow
+	}
+}
+
+// WithServerAllowedAuthenTypes restricts authentication START packets to the
+// listed authen_type values (RFC 8907 Section 10.5.3), letting an operator
+// require challenge/response methods such as CHAP or MS-CHAPv2. A START with a
+// disallowed type is refused with FAIL before the handler runs. An empty list
+// allows every type.
+func WithServerAllowedAuthenTypes(types ...AuthenType) ServerOption {
+	return func(s *Server) {
+		if len(types) == 0 {
+			s.allowedAuthenTypes = nil
+			return
+		}
+		s.allowedAuthenTypes = make(map[AuthenType]struct{}, len(types))
+		for _, t := range types {
+			s.allowedAuthenTypes[t] = struct{}{}
+		}
 	}
 }
 
@@ -688,6 +764,11 @@ func copyUserData(ud map[string]string) map[string]string {
 	return cp
 }
 
+// errTLSUnencryptedFlagMissing marks a TLS packet that lacks the required
+// unencrypted flag (RFC 9887 Section 4). serveConn answers it with a
+// STATUS_ERROR reply before terminating.
+var errTLSUnencryptedFlagMissing = errors.New("TLS packet missing unencrypted flag")
+
 // connState holds per-connection state passed to internal handler methods.
 type connState struct {
 	remoteAddr    net.Addr
@@ -826,6 +907,89 @@ func (s *Server) sendKickedResponse(conn net.Conn, header *Header, secret []byte
 	s.writePacket(conn, respHeader, respBody, secret, isTLS)
 }
 
+// replyableReadError reports whether a read error requires a protocol reply
+// before terminating, in which case the parsed header must be forwarded to
+// serveConn: RFC 9887 Section 4 (TLS missing flag) and RFC 8907 Section 3.6
+// (undeterminable packet type).
+func replyableReadError(err error) bool {
+	return errors.Is(err, errTLSUnencryptedFlagMissing) || errors.Is(err, ErrInvalidType)
+}
+
+// handleReadError maps a packet read error to the serveConn return value. A
+// clean EOF ends the connection without error; a TLS packet missing the
+// unencrypted flag gets the RFC 9887 STATUS_ERROR reply; an undeterminable
+// packet type gets the RFC 8907 Section 3.6 reply. Both terminate the session.
+func (s *Server) handleReadError(conn net.Conn, header *Header, cs *connState, err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if header != nil {
+		switch {
+		case errors.Is(err, errTLSUnencryptedFlagMissing):
+			s.sendTLSFlagError(conn, header, cs)
+		case errors.Is(err, ErrInvalidType):
+			s.sendUnknownTypeError(conn, header)
+		}
+	}
+	return err
+}
+
+// sendUnknownTypeError sends the RFC 8907 Section 3.6 reply for a packet whose
+// type could not be determined: the identical cleartext header with the
+// sequence number incremented by one and the length set to zero.
+func (s *Server) sendUnknownTypeError(conn net.Conn, header *Header) {
+	respHeader := &Header{
+		Version:   header.Version,
+		Type:      header.Type,
+		SeqNo:     header.SeqNo + 1,
+		Flags:     header.Flags,
+		SessionID: header.SessionID,
+		Length:    0,
+	}
+	headerBuf, err := respHeader.MarshalBinary()
+	if err != nil {
+		return
+	}
+	if s.writeTimeout > 0 {
+		conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	}
+	_ = writeAll(conn, headerBuf)
+}
+
+// sendTLSFlagError sends the RFC 9887 Section 4 STATUS_ERROR reply for a TLS
+// packet received without the unencrypted flag. The reply itself carries the
+// unencrypted flag set, as the RFC requires.
+func (s *Server) sendTLSFlagError(conn net.Conn, header *Header, cs *connState) {
+	var respBody []byte
+	var respType PacketType
+
+	switch header.Type {
+	case PacketTypeAuthen:
+		respBody, respType = s.authenErrorResponse("RFC 9887 requires the unencrypted flag on TLS connections")
+	case PacketTypeAuthor:
+		respBody, respType = s.authorErrorResponse("RFC 9887 requires the unencrypted flag on TLS connections")
+	case PacketTypeAcct:
+		respBody, respType = s.acctErrorResponse("RFC 9887 requires the unencrypted flag on TLS connections")
+	default:
+		return
+	}
+
+	respHeader := &Header{
+		Version:   header.Version,
+		Type:      respType,
+		SeqNo:     header.SeqNo + 1,
+		SessionID: header.SessionID,
+		Length:    uint32(len(respBody)),
+	}
+
+	if s.writeTimeout > 0 {
+		conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	}
+
+	// writePacket sets the unencrypted flag because the connection is TLS.
+	s.writePacket(conn, respHeader, respBody, cs.secret, cs.isTLS)
+}
+
 // handleConnection is the listener-driven entry point. The wait group counter
 // is added by Serve before this goroutine starts, so it only releases it here
 // and delegates the per-connection work to serveConn. The terminating error is
@@ -874,6 +1038,14 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 		secretReq:     secretReq,
 	}
 
+	// RFC 8907 Section 10.5.2: a non-TLS connection MUST have a shared secret.
+	// Reject secretless cleartext unless the operator explicitly opted in.
+	if !isTLS && len(cs.secret) == 0 && !s.allowInsecure {
+		s.fireConnect(cs.remoteAddr, cs.localAddr, cs.tlsState)
+		s.fireDisconnect(cs.remoteAddr, cs.localAddr)
+		return fmt.Errorf("%w: from %v", ErrNoSecret, cs.remoteAddr)
+	}
+
 	// Secret rotation: resolved after first packet when multiple secrets are available
 	secretResolved := false
 	firstPacket := true
@@ -884,6 +1056,9 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 	// Use connection-local session map to prevent cross-client session hijacking
 	localSessions := make(map[uint32]*Session)
 	trackingIDs := make(map[uint32]uint64)
+	// authenPrompts counts interactive re-prompts per session to enforce the
+	// RFC 8907 Section 5.4.2.1 retry limit.
+	authenPrompts := make(map[uint32]int)
 	defer func() {
 		s.cleanupConnection(localSessions, trackingIDs, cs)
 	}()
@@ -900,42 +1075,30 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			conn.SetReadDeadline(time.Now().Add(s.readTimeout))
 		}
 
-		var header *Header
-		var body []byte
-
-		if secretResolved || cs.totalAttempts <= 1 {
-			var err error
-			header, body, err = s.readPacket(conn, cs.secret, cs.isTLS)
-			if err != nil {
-				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				return err
-			}
-		} else {
-			var err error
-			header, body, err = s.readRawPacket(conn, len(cs.secret) > 0, cs.isTLS)
-			if err != nil {
-				s.fireReadError(err, cs.remoteAddr, cs.localAddr)
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				return err
-			}
-			body = s.resolveSecret(ctx, header, body, cs)
-			secretResolved = true
+		header, body, err := s.readConnPacket(ctx, conn, cs, secretResolved)
+		if err != nil {
+			return s.handleReadError(conn, header, cs, err)
 		}
+		secretResolved = true
 
-		// RFC 8907 Section 4.3: negotiate only on the first exchange.
+		// RFC 8907 Section 4.3: negotiate only on the first exchange, and only
+		// when the server is configured to accept single-connect mode.
 		if firstPacket {
-			singleConnectFlag = header.Flags & FlagSingleConnect
+			if s.allowSingleConnect {
+				singleConnectFlag = header.Flags & FlagSingleConnect
+			}
 			firstPacket = false
 		}
 
 		// Get or create session (scoped to this connection for security)
 		session, exists := localSessions[header.SessionID]
 		if !exists {
+			// Bound per-connection memory: a client opening interactive
+			// sessions and abandoning them must not grow the session maps
+			// indefinitely.
+			if len(localSessions) >= s.maxSessionsPerConn {
+				return fmt.Errorf("%w: limit of %d concurrent sessions per connection reached", ErrTooManySessions, s.maxSessionsPerConn)
+			}
 			session = NewSessionWithID(header.SessionID, false)
 			localSessions[header.SessionID] = session
 			s.registerSession(header, cs, trackingIDs)
@@ -974,6 +1137,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 		switch header.Type {
 		case PacketTypeAuthen:
 			respBody, respType, sessionState = s.handleAuthenPacketWithState(ctx, header, body, cs)
+			respBody, sessionState = s.enforceAuthenRetryLimit(header.SessionID, respBody, sessionState, authenPrompts)
 		case PacketTypeAuthor:
 			respBody, respType, sessionState = s.handleAuthorPacket(ctx, header, body, cs)
 		case PacketTypeAcct:
@@ -1044,9 +1208,9 @@ func (s *Server) getSecret(ctx context.Context, req SecretRequest) SecretRespons
 
 // resolveSecret tries each secret in order until one successfully deobfuscates and validates
 // the packet. Returns the deobfuscated body. On success, updates cs.secret and cs.userData.
-// If all secrets fail, returns the body deobfuscated with the first secret
-// so the handler produces a standard "bad secret" response.
-func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []byte, cs *connState) []byte {
+// If all secrets fail, it returns ErrBadSecret so the caller terminates the
+// connection per RFC 8907 Section 10.5.2 without sending a reply.
+func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []byte, cs *connState) ([]byte, error) {
 	for i := range cs.totalAttempts {
 		var attemptSecret []byte
 		var attemptUserData map[string]string
@@ -1065,19 +1229,62 @@ func (s *Server) resolveSecret(ctx context.Context, header *Header, rawBody []by
 		if validateErr == nil {
 			cs.secret = attemptSecret
 			cs.userData = attemptUserData
-			return deobBody
+			return deobBody, nil
 		}
 	}
 
-	// All secrets failed: deobfuscate with the first secret
 	s.fireBadSecret(cs.remoteAddr, cs.localAddr)
-	if !cs.isTLS && header.Flags&FlagUnencrypted == 0 && len(cs.secret) > 0 {
-		return Obfuscate(header, cs.secret, rawBody)
-	}
-	return rawBody
+	return nil, fmt.Errorf("%w: no configured secret validates the packet", ErrBadSecret)
 }
 
-func (s *Server) readRawPacket(conn net.Conn, hasSecret, isTLS bool) (*Header, []byte, error) {
+// readConnPacket reads and deobfuscates the next packet on conn. Until the
+// rotation secret is resolved it tries every provider secret on the raw body;
+// afterwards it reads with the resolved secret and validates the body.
+func (s *Server) readConnPacket(ctx context.Context, conn net.Conn, cs *connState, secretResolved bool) (*Header, []byte, error) {
+	if !secretResolved && cs.totalAttempts > 1 {
+		header, body, err := s.readRawPacket(conn, cs.isTLS)
+		if err != nil {
+			s.fireReadError(err, cs.remoteAddr, cs.localAddr)
+			if replyableReadError(err) {
+				return header, nil, err
+			}
+			return nil, nil, err
+		}
+		body, err = s.resolveSecret(ctx, header, body, cs)
+		if err != nil {
+			return nil, nil, err
+		}
+		return header, body, nil
+	}
+
+	header, body, err := s.readPacket(conn, cs.secret, cs.isTLS)
+	if err != nil {
+		s.fireReadError(err, cs.remoteAddr, cs.localAddr)
+		// Keep the header for cases where serveConn must reply before
+		// terminating (RFC 9887 missing-flag, RFC 8907 Section 3.6 unknown type).
+		if replyableReadError(err) {
+			return header, nil, err
+		}
+		return nil, nil, err
+	}
+
+	// RFC 8907 Section 10.5.2: a body that fails to parse after deobfuscation
+	// signals an invalid shared secret, and no new sessions may be accepted on
+	// this connection. Terminate without replying: an error reply obfuscated
+	// with the real secret would hand the peer a known-plaintext pseudo-pad
+	// sample for offline secret recovery. ErrInvalidSequence is excluded so
+	// pure sequencing violations keep their own error path in serveConn.
+	if !cs.isTLS && header.Flags&FlagUnencrypted == 0 && len(cs.secret) > 0 {
+		if _, perr := ParsePacket(header, body); perr != nil && !errors.Is(perr, ErrInvalidSequence) {
+			s.fireBadSecret(cs.remoteAddr, cs.localAddr)
+			return nil, nil, fmt.Errorf("%w: packet failed validation after deobfuscation", ErrBadSecret)
+		}
+	}
+
+	return header, body, nil
+}
+
+func (s *Server) readRawPacket(conn net.Conn, isTLS bool) (*Header, []byte, error) {
 	// Read header
 	headerBuf := make([]byte, HeaderLength)
 	if _, err := io.ReadFull(conn, headerBuf); err != nil {
@@ -1089,21 +1296,30 @@ func (s *Server) readRawPacket(conn net.Conn, hasSecret, isTLS bool) (*Header, [
 		return nil, nil, err
 	}
 
-	// Validate header version and type
+	// Validate header version and type. An unknown packet type is returned
+	// with the header so serveConn can send the RFC 8907 Section 3.6 reply
+	// (identical header, seq_no+1, length 0); other validation failures just
+	// terminate the connection.
 	if err := header.Validate(); err != nil {
+		if errors.Is(err, ErrInvalidType) {
+			return header, nil, err
+		}
 		return nil, nil, err
 	}
 
-	// RFC 9887: On TLS connections, the unencrypted flag MUST be set.
-	// Reject packets without the flag when using TLS.
+	// RFC 9887 Section 4: On TLS connections, the unencrypted flag MUST be set.
+	// Return the header so serveConn can send the mandated STATUS_ERROR reply
+	// before terminating the session.
 	if isTLS && !header.IsUnencrypted() {
-		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
+		return header, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", errTLSUnencryptedFlagMissing)
 	}
 
-	// Reject unencrypted flag on non-TLS connections when a secret is configured.
-	// This prevents clients from bypassing obfuscation by setting the flag.
-	if !isTLS && header.IsUnencrypted() && hasSecret {
-		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections with shared secret", ErrInvalidPacket)
+	// RFC 8907 Section 4.5: "A request MUST be dropped if
+	// TAC_PLUS_UNENCRYPTED_FLAG is set to true." This is unconditional, so it
+	// applies even on the AllowInsecure (no-secret) path, not only when a
+	// secret is configured.
+	if !isTLS && header.IsUnencrypted() {
+		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections", ErrInvalidPacket)
 	}
 
 	// Validate body length to prevent memory exhaustion
@@ -1124,8 +1340,14 @@ func (s *Server) readRawPacket(conn net.Conn, hasSecret, isTLS bool) (*Header, [
 }
 
 func (s *Server) readPacket(conn net.Conn, secret []byte, isTLS bool) (*Header, []byte, error) {
-	header, body, err := s.readRawPacket(conn, len(secret) > 0, isTLS)
+	header, body, err := s.readRawPacket(conn, isTLS)
 	if err != nil {
+		// Forward the header for cases where serveConn must reply before
+		// terminating: the RFC 9887 missing-flag case and the RFC 8907
+		// Section 3.6 unknown-type case.
+		if errors.Is(err, errTLSUnencryptedFlagMissing) || errors.Is(err, ErrInvalidType) {
+			return header, nil, err
+		}
 		return nil, nil, err
 	}
 
@@ -1217,6 +1439,31 @@ func (s *Server) handleAuthenPacketWithState(ctx context.Context, header *Header
 	return respBody, respType, SessionStateError
 }
 
+// enforceAuthenRetryLimit bounds interactive authentication re-prompts per
+// RFC 8907 Section 5.4.2.1. Each GETUSER/GETPASS/GETDATA reply counts as a
+// prompt; once a session exceeds maxAuthenRetries prompts, the reply is
+// replaced with FAIL and the session ends, so a handler that loops on GET*
+// cannot keep a session alive to the sequence-number ceiling. A non-positive
+// maxAuthenRetries disables the cap.
+func (s *Server) enforceAuthenRetryLimit(sessionID uint32, respBody []byte, state SessionState, prompts map[uint32]int) ([]byte, SessionState) {
+	if s.maxAuthenRetries <= 0 || len(respBody) == 0 {
+		return respBody, state
+	}
+	switch AuthenStatus(respBody[0]) {
+	case AuthenStatusGetData, AuthenStatusGetUser, AuthenStatusGetPass:
+		prompts[sessionID]++
+		if prompts[sessionID] > s.maxAuthenRetries {
+			delete(prompts, sessionID)
+			reply := &AuthenReply{Status: AuthenStatusFail, ServerMsg: []byte("too many authentication retries")}
+			failBody, _ := reply.MarshalBinary()
+			return failBody, SessionStateError
+		}
+	default:
+		delete(prompts, sessionID)
+	}
+	return respBody, state
+}
+
 func (s *Server) fireConnect(remoteAddr, localAddr net.Addr, tlsState *tls.ConnectionState) {
 	if s.hooks.OnConnect != nil {
 		s.hooks.OnConnect(ConnectEvent{RemoteAddr: remoteAddr, LocalAddr: localAddr, TLSState: tlsState})
@@ -1286,6 +1533,26 @@ func (s *Server) handleAuthenStart(ctx context.Context, header *Header, body []b
 		return resp, ptype
 	}
 
+	// RFC 8907 Section 3.7: a username present in the START MUST satisfy the
+	// RFC 8265 profile. ASCII login may omit the user here (collected later
+	// via GETUSER), so only validate when present.
+	if len(start.User) > 0 {
+		if err := ValidateUsername(start.User); err != nil {
+			s.firePacketError(cs.remoteAddr, cs.localAddr, err)
+			return s.authenErrorResponse("invalid username")
+		}
+	}
+
+	// RFC 8907 Section 10.5.3: refuse authentication types the operator has
+	// not permitted (used to require challenge/response methods).
+	if s.allowedAuthenTypes != nil {
+		if _, ok := s.allowedAuthenTypes[start.AuthenType]; !ok {
+			reply := &AuthenReply{Status: AuthenStatusFail, ServerMsg: []byte("authentication type not permitted")}
+			respBody, _ := reply.MarshalBinary()
+			return respBody, PacketTypeAuthen
+		}
+	}
+
 	req := &AuthenRequest{
 		SessionID:  header.SessionID,
 		RemoteAddr: cs.remoteAddr,
@@ -1353,6 +1620,15 @@ func (s *Server) handleAuthorPacket(ctx context.Context, header *Header, body []
 		return respBody, respType, SessionStateError
 	}
 
+	// RFC 8907 Section 3.7: validate the username against the RFC 8265 profile.
+	if len(request.User) > 0 {
+		if err := ValidateUsername(request.User); err != nil {
+			s.firePacketError(cs.remoteAddr, cs.localAddr, err)
+			respBody, respType := s.authorErrorResponse("invalid username")
+			return respBody, respType, SessionStateError
+		}
+	}
+
 	req := &AuthorRequestContext{
 		SessionID:  header.SessionID,
 		RemoteAddr: cs.remoteAddr,
@@ -1398,6 +1674,28 @@ func (s *Server) handleAcctPacket(ctx context.Context, header *Header, body []by
 		}
 		respBody, respType := s.acctErrorResponse(msg)
 		return respBody, respType, SessionStateError
+	}
+
+	// RFC 8907 Section 7.2: reject INVALID flag combinations with
+	// ACCT_STATUS_ERROR before invoking the handler.
+	if !request.HasValidFlags() {
+		respBody, respType := s.acctErrorResponse("invalid accounting flag combination")
+		return respBody, respType, SessionStateError
+	}
+
+	// RFC 8907 Section 3.7: validate the username against the RFC 8265 profile.
+	if len(request.User) > 0 {
+		if err := ValidateUsername(request.User); err != nil {
+			s.firePacketError(cs.remoteAddr, cs.localAddr, err)
+			respBody, respType := s.acctErrorResponse("invalid username")
+			return respBody, respType, SessionStateError
+		}
+	}
+
+	// RFC 8907 Section 7.2: a WATCHDOG record without START provides no new
+	// information, so servers MUST ignore any arguments it carries.
+	if request.IsWatchdog() && !request.IsStart() {
+		request.RawArgs = nil
 	}
 
 	req := &AcctRequestContext{

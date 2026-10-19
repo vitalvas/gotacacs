@@ -1070,6 +1070,37 @@ func TestArgValuesParsing(t *testing.T) {
 		}
 	})
 
+	t.Run("optional separator parsed not dropped", func(t *testing.T) {
+		// RFC 8907 Section 6.1: '*' marks an optional argument. It must be
+		// parsed (split on the first separator), not dropped like a malformed
+		// arg. A value may itself contain separators after the first one.
+		values := ArgValuesFromArgs([]string{
+			"protocol*ip",
+			"optional-attr*",
+			"url*http://x=y",
+		})
+		if got := values.Get("protocol"); got != "ip" {
+			t.Errorf("got %v, want %v", got, "ip")
+		}
+		if got, ok := values["optional-attr"]; !ok || !reflect.DeepEqual(got, []string{""}) {
+			t.Errorf("got %v (present=%v), want [\"\"]", got, ok)
+		}
+		if got := values.Get("url"); got != "http://x=y" {
+			t.Errorf("got %v, want %v", got, "http://x=y")
+		}
+	})
+
+	t.Run("first separator wins across = and *", func(t *testing.T) {
+		// "a=b*c" splits at '=' (mandatory); "a*b=c" splits at '*' (optional).
+		values := ArgValuesFromArgs([]string{"a=b*c", "d*e=f"})
+		if got := values.Get("a"); got != "b*c" {
+			t.Errorf("got %v, want %v", got, "b*c")
+		}
+		if got := values.Get("d"); got != "e=f" {
+			t.Errorf("got %v, want %v", got, "e=f")
+		}
+	})
+
 	t.Run("nil empty and malformed", func(t *testing.T) {
 		if got := ArgValuesFromArgs(nil); got != nil {
 			t.Errorf("expected nil, got %v", got)
@@ -1142,6 +1173,154 @@ func TestPacketArgValues(t *testing.T) {
 		}
 		if got := values.Get("service"); got != "shell" {
 			t.Errorf("got %v, want %v", got, "shell")
+		}
+	})
+}
+
+func TestParseArg(t *testing.T) {
+	t.Run("mandatory", func(t *testing.T) {
+		arg, ok := ParseArg("service=shell")
+		if !ok || arg.Name != "service" || arg.Value != "shell" || arg.Optional {
+			t.Errorf("got %+v ok=%v, want mandatory service=shell", arg, ok)
+		}
+		if arg.String() != "service=shell" {
+			t.Errorf("round-trip got %q", arg.String())
+		}
+	})
+
+	t.Run("optional", func(t *testing.T) {
+		arg, ok := ParseArg("protocol*ip")
+		if !ok || arg.Name != "protocol" || arg.Value != "ip" || !arg.Optional {
+			t.Errorf("got %+v ok=%v, want optional protocol*ip", arg, ok)
+		}
+		if arg.String() != "protocol*ip" {
+			t.Errorf("round-trip got %q", arg.String())
+		}
+	})
+
+	t.Run("first separator wins", func(t *testing.T) {
+		arg, _ := ParseArg("a=b*c")
+		if arg.Optional || arg.Value != "b*c" {
+			t.Errorf("got %+v, want mandatory value b*c", arg)
+		}
+	})
+
+	t.Run("no separator is invalid", func(t *testing.T) {
+		if _, ok := ParseArg("noseparator"); ok {
+			t.Error("expected arg without separator to be rejected")
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		arg, ok := ParseArg("cmd=")
+		if !ok || arg.Name != "cmd" || arg.Value != "" || arg.Optional {
+			t.Errorf("got %+v ok=%v, want mandatory cmd with empty value", arg, ok)
+		}
+		if arg.String() != "cmd=" {
+			t.Errorf("round-trip got %q", arg.String())
+		}
+	})
+}
+
+func TestMarshalArgs(t *testing.T) {
+	t.Run("preserves separators order and duplicates", func(t *testing.T) {
+		// RFC 8907 Section 6.1: mandatory '=' and optional '*' must both survive,
+		// order is significant (e.g. cmd-arg), and duplicates must be kept.
+		args := []Arg{
+			{Name: "service", Value: "shell"},
+			{Name: "cmd", Value: "show"},
+			{Name: "cmd-arg", Value: "running-config"},
+			{Name: "cmd-arg", Value: "all"},
+			{Name: "protocol", Value: "ip", Optional: true},
+			{Name: "optional-attr", Value: "", Optional: true},
+		}
+		got := MarshalArgs(args)
+		want := [][]byte{
+			[]byte("service=shell"),
+			[]byte("cmd=show"),
+			[]byte("cmd-arg=running-config"),
+			[]byte("cmd-arg=all"),
+			[]byte("protocol*ip"),
+			[]byte("optional-attr*"),
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("nil and empty", func(t *testing.T) {
+		if got := MarshalArgs(nil); got != nil {
+			t.Errorf("expected nil, got %q", got)
+		}
+		if got := MarshalArgs([]Arg{}); got != nil {
+			t.Errorf("expected nil, got %q", got)
+		}
+	})
+
+	t.Run("round-trip through ParseArgs is lossless", func(t *testing.T) {
+		raw := [][]byte{
+			[]byte("service=shell"),
+			[]byte("cmd-arg=a"),
+			[]byte("cmd-arg=b"),
+			[]byte("protocol*ip"),
+			[]byte("url*http://x=y"),
+		}
+		if got := MarshalArgs(ParseArgs(raw)); !reflect.DeepEqual(got, raw) {
+			t.Errorf("round-trip changed args: got %q, want %q", got, raw)
+		}
+	})
+
+	t.Run("skips args whose name contains a separator", func(t *testing.T) {
+		// RFC 8907 6.1: "An argument name MUST NOT contain either of the
+		// separators." Emitting Arg{Name:"a*b"} would reparse to a different
+		// name/value, so MarshalArgs must drop such malformed args.
+		got := MarshalArgs([]Arg{
+			{Name: "service", Value: "shell"},
+			{Name: "a*b", Value: "c"}, // '*' in name
+			{Name: "d=e", Value: "f"}, // '=' in name
+			{Name: "protocol", Value: "ip", Optional: true},
+		})
+		want := [][]byte{[]byte("service=shell"), []byte("protocol*ip")}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+func TestArgIsValidName(t *testing.T) {
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"service", true},
+		{"cmd-arg", true},
+		{"a*b", false},
+		{"d=e", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := (Arg{Name: tc.name, Value: "x"}).IsValidName(); got != tc.ok {
+			t.Errorf("Arg{Name:%q}.IsValidName() = %v, want %v", tc.name, got, tc.ok)
+		}
+	}
+}
+
+func FuzzArgRoundtrip(f *testing.F) {
+	f.Add("service=shell")
+	f.Add("protocol*ip")
+	f.Add("cmd=")
+	f.Add("url*http://x=y")
+	f.Add("noseparator")
+	f.Fuzz(func(t *testing.T, s string) {
+		arg, ok := ParseArg(s)
+		if !ok {
+			return
+		}
+		// A parsed arg re-rendered then re-parsed must be identical: the name
+		// has no separator, so the first separator is stable.
+		again, ok := ParseArg(arg.String())
+		if !ok || again != arg {
+			t.Fatalf("round-trip mismatch: %q -> %+v -> %q -> %+v", s, arg, arg.String(), again)
 		}
 	})
 }

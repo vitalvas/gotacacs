@@ -3,6 +3,7 @@ package gotacacs
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,22 @@ import (
 // infinite loop. The TACACS+ protocol limits sessions to 255 sequence numbers,
 // but a practical authentication exchange should never exceed this many prompts.
 const maxASCIIPrompts = 20
+
+// errUnencryptedFlagMismatch marks a response that arrived with
+// TAC_PLUS_UNENCRYPTED_FLAG set while the client has a shared secret. RFC 8907
+// Section 10.5.2 requires closing the session and processing it as a FAIL; the
+// AAA methods translate this into the matching FAIL sentinel for the caller.
+var errUnencryptedFlagMismatch = errors.New("response carried the unencrypted flag with a secret configured")
+
+// mapRecvError translates a recvPacket error. A flag mismatch (RFC 8907
+// Section 10.5.2) is reported as the given FAIL sentinel so the caller treats
+// it exactly like a server FAIL status; any other error passes through.
+func mapRecvError(err, failErr error) error {
+	if errors.Is(err, errUnencryptedFlagMismatch) {
+		return failErr
+	}
+	return err
+}
 
 // Client represents a TACACS+ client for communicating with a TACACS+ server.
 type Client struct {
@@ -168,7 +185,7 @@ func (c *Client) connectLocked(ctx context.Context) error {
 
 	conn, err := c.dialer.Dial(ctx, "tcp", c.address)
 	if err != nil {
-		return fmt.Errorf("failed to connect to %s: %w", c.address, err)
+		return fmt.Errorf("failed to connect to %s: %w", c.address, wrapTimeout(err))
 	}
 	if c.tlsMode && !IsTLSConn(conn) {
 		_ = conn.Close()
@@ -218,6 +235,16 @@ func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn != nil
+}
+
+// wrapTimeout tags network timeout errors with ErrTimeout so callers can
+// branch with errors.Is; the underlying error stays in the chain.
+func wrapTimeout(err error) error {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Errorf("%w: %w", ErrTimeout, err)
+	}
+	return err
 }
 
 // effectiveDeadline returns the earliest deadline from the context and timeout.
@@ -280,12 +307,12 @@ func (c *Client) sendPacket(ctx context.Context, header *Header, body []byte) er
 
 	// Write header and body using writeAll to handle partial writes
 	if err := writeAll(c.conn, headerData); err != nil {
-		return fmt.Errorf("failed to write header: %w", err)
+		return fmt.Errorf("failed to write header: %w", wrapTimeout(err))
 	}
 
 	if len(obfuscatedBody) > 0 {
 		if err := writeAll(c.conn, obfuscatedBody); err != nil {
-			return fmt.Errorf("failed to write body: %w", err)
+			return fmt.Errorf("failed to write body: %w", wrapTimeout(err))
 		}
 	}
 
@@ -305,7 +332,7 @@ func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
 		if err == io.EOF {
 			return nil, nil, ErrConnectionClosed
 		}
-		return nil, nil, fmt.Errorf("failed to read header: %w", err)
+		return nil, nil, fmt.Errorf("failed to read header: %w", wrapTimeout(err))
 	}
 
 	header := &Header{}
@@ -333,11 +360,14 @@ func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
 		return nil, nil, fmt.Errorf("%w: RFC 9887 requires unencrypted flag on TLS connections", ErrInvalidPacket)
 	}
 
-	// Reject unencrypted flag on non-TLS connections when a secret is configured.
-	// This mirrors the server-side check and prevents peers from bypassing
-	// TACACS+ body obfuscation on plaintext transports.
+	// RFC 8907 Section 10.5.2: a client configured with a shared key that
+	// receives a response with TAC_PLUS_UNENCRYPTED_FLAG set MUST close the
+	// session and process it as a FAIL. Signal that distinctly so callers map
+	// it to an authentication/authorization failure rather than a generic
+	// protocol error. When no secret is configured obfuscation is a no-op, so
+	// the flag is only a mismatch when a secret is present.
 	if !isTLS && header.IsUnencrypted() && len(c.secret) > 0 {
-		return nil, nil, fmt.Errorf("%w: unencrypted flag not allowed on non-TLS connections with shared secret", ErrInvalidPacket)
+		return nil, nil, errUnencryptedFlagMismatch
 	}
 
 	// Read body
@@ -345,7 +375,7 @@ func (c *Client) recvPacket(ctx context.Context) (*Header, []byte, error) {
 	if header.Length > 0 {
 		body = make([]byte, header.Length)
 		if _, err := io.ReadFull(c.conn, body); err != nil {
-			return nil, nil, fmt.Errorf("failed to read body: %w", err)
+			return nil, nil, fmt.Errorf("failed to read body: %w", wrapTimeout(err))
 		}
 
 		// Deobfuscate body (skipped if using TLS per RFC 9887)
@@ -369,7 +399,12 @@ func (c *Client) newSession() (*Session, error) {
 
 // AuthenticateContext holds the context for multi-step authentication.
 type AuthenticateContext struct {
-	Session    *Session
+	// Session is used for the exchange when non-nil; a fresh random
+	// session is created otherwise.
+	Session *Session
+	// Action is the authentication action. The zero value selects
+	// AuthenActionLogin; set AuthenActionChPass to change a password.
+	Action     AuthenAction
 	Username   string
 	Password   string
 	Port       string
@@ -378,6 +413,9 @@ type AuthenticateContext struct {
 
 // Authenticate performs authentication with the TACACS+ server.
 // It handles the complete authentication flow including multi-step interactions.
+// A FAIL status returns the reply together with ErrAuthenticationFailed;
+// FOLLOW and RESTART return the reply with ErrAuthenFollow and
+// ErrAuthenRestart. Network timeouts wrap ErrTimeout.
 func (c *Client) Authenticate(ctx context.Context, username, password string) (*AuthenReply, error) {
 	return c.AuthenticateWithContext(ctx, &AuthenticateContext{
 		Username: username,
@@ -386,6 +424,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (*
 }
 
 // AuthenticateWithContext performs authentication with additional context.
+// It returns the same errors as Authenticate.
 func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *AuthenticateContext) (*AuthenReply, error) {
 	if authCtx == nil {
 		return nil, fmt.Errorf("%w: authCtx cannot be nil", ErrInvalidPacket)
@@ -400,15 +439,25 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	}
 	defer c.watchContext(ctx)()
 
-	// Create new session
-	session, err := c.newSession()
-	if err != nil {
-		return nil, err
+	// Use the caller-supplied session when provided
+	session := authCtx.Session
+	if session == nil {
+		var err error
+		session, err = c.newSession()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		c.session = session
 	}
 
 	// Create START packet
+	action := authCtx.Action
+	if action == 0 {
+		action = AuthenActionLogin
+	}
 	start := &AuthenStart{
-		Action:     AuthenActionLogin,
+		Action:     action,
 		PrivLevel:  1,
 		AuthenType: AuthenTypePAP, // Use PAP for simple password auth
 		Service:    AuthenServiceLogin,
@@ -418,12 +467,22 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 		Data:       []byte(authCtx.Password), // PAP sends password in START
 	}
 
+	return c.runSingleExchange(ctx, session, start)
+}
+
+// runSingleExchange sends a single authentication START and processes the
+// single REPLY, the exchange shape shared by PAP (Section 5.4.2.2) and CHAP
+// (Section 5.4.2.3). The caller holds c.mu and has established the connection
+// and session. A FAIL status returns the reply with ErrAuthenticationFailed;
+// FOLLOW and RESTART return the reply with ErrAuthenFollow / ErrAuthenRestart;
+// an interactive GET* status is a protocol error for a single-exchange method.
+func (c *Client) runSingleExchange(ctx context.Context, session *Session, start *AuthenStart) (*AuthenReply, error) {
 	startBody, err := start.MarshalBinary()
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal START packet: %w", err)
 	}
 
-	// Create header
+	// Create header. PAP and CHAP both use minor version 1 (Section 5.4.1).
 	header := NewHeader(PacketTypeAuthen, session.ID())
 	header.Version = MajorVersion<<4 | MinorVersionOne
 	seqNo, err := session.NextSeqNo()
@@ -442,7 +501,7 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
-		return nil, err
+		return nil, mapRecvError(err, ErrAuthenticationFailed)
 	}
 
 	// Validate response
@@ -474,7 +533,13 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	switch reply.Status {
 	case AuthenStatusPass:
 		session.SetState(SessionStateComplete)
-	case AuthenStatusFail, AuthenStatusError:
+	case AuthenStatusFail:
+		session.SetState(SessionStateError)
+		if !singleConnectOK {
+			c.closeConnection()
+		}
+		return reply, ErrAuthenticationFailed
+	case AuthenStatusError:
 		session.SetState(SessionStateError)
 	case AuthenStatusFollow:
 		session.SetState(SessionStateComplete)
@@ -491,7 +556,7 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	case AuthenStatusGetData, AuthenStatusGetUser, AuthenStatusGetPass:
 		session.SetState(SessionStateError)
 		c.closeConnection()
-		return reply, fmt.Errorf("%w: interactive authentication status %d returned to non-interactive Authenticate", ErrInvalidPacket, reply.Status)
+		return reply, fmt.Errorf("%w: interactive authentication status %d returned to non-interactive authentication", ErrInvalidPacket, reply.Status)
 	default:
 		session.SetState(SessionStateError)
 		c.closeConnection()
@@ -506,10 +571,37 @@ func (c *Client) AuthenticateWithContext(ctx context.Context, authCtx *Authentic
 	return reply, nil
 }
 
+// AuthenticateCHAP performs a CHAP login (RFC 8907 Section 5.4.2.3): a single
+// START carrying the username and the id/challenge/MD5-response data field,
+// and a single REPLY. The caller supplies the PPP id and challenge; the
+// response is computed from the shared secret with CHAPResponse. The challenge
+// SHOULD be at least 8 octets and unpredictable. A FAIL status returns the
+// reply with ErrAuthenticationFailed.
+func (c *Client) AuthenticateCHAP(ctx context.Context, username string, id byte, secret, challenge []byte) (*AuthenReply, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.connectLocked(ctx); err != nil {
+		return nil, err
+	}
+	defer c.watchContext(ctx)()
+
+	session, err := c.newSession()
+	if err != nil {
+		return nil, err
+	}
+
+	start := NewCHAPStart(username, id, secret, challenge)
+	start.Port = nil
+	start.RemoteAddr = nil
+	return c.runSingleExchange(ctx, session, start)
+}
+
 // AuthenticateASCII performs ASCII authentication with interactive prompts.
 // The promptHandler is called for each GETDATA/GETUSER/GETPASS request.
 // A missing callback when input is requested returns ErrInvalidPacket.
 // At most 20 prompt responses are allowed; a further prompt returns ErrMaxPrompts.
+// A FAIL status returns the reply together with ErrAuthenticationFailed.
 func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptHandler func(prompt string, noEcho bool) (string, error)) (*AuthenReply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -561,7 +653,7 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 		respHeader, respBody, err := c.recvPacket(ctx)
 		if err != nil {
 			c.closeConnection()
-			return nil, err
+			return nil, mapRecvError(err, ErrAuthenticationFailed)
 		}
 
 		// Validate response
@@ -599,7 +691,15 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 			return reply, nil
 		}
 
-		if reply.IsFail() || reply.IsError() {
+		if reply.IsFail() {
+			session.SetState(SessionStateError)
+			if !singleConnectOK {
+				c.closeConnection()
+			}
+			return reply, ErrAuthenticationFailed
+		}
+
+		if reply.IsError() {
 			session.SetState(SessionStateError)
 			if !singleConnectOK {
 				c.closeConnection()
@@ -676,6 +776,8 @@ func (c *Client) AuthenticateASCII(ctx context.Context, username string, promptH
 }
 
 // Authorize performs authorization with the TACACS+ server.
+// A FAIL status returns the response together with ErrAuthorizationDenied.
+// Network timeouts wrap ErrTimeout.
 func (c *Client) Authorize(ctx context.Context, username string, args []string) (*AuthorResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -728,7 +830,7 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
-		return nil, err
+		return nil, mapRecvError(err, ErrAuthorizationDenied)
 	}
 
 	// Validate response
@@ -753,11 +855,20 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 		return nil, fmt.Errorf("failed to unmarshal RESPONSE: %w", err)
 	}
 
+	// RFC 8907: Check if server agreed to single-connect mode
+	singleConnectOK := c.acceptSingleConnect(respHeader)
+
 	// Update session state
 	switch resp.Status {
 	case AuthorStatusPassAdd, AuthorStatusPassRepl:
 		session.SetState(SessionStateComplete)
-	case AuthorStatusFail, AuthorStatusError, AuthorStatusFollow:
+	case AuthorStatusFail:
+		session.SetState(SessionStateError)
+		if !singleConnectOK {
+			c.closeConnection()
+		}
+		return resp, ErrAuthorizationDenied
+	case AuthorStatusError, AuthorStatusFollow:
 		session.SetState(SessionStateError)
 	default:
 		session.SetState(SessionStateError)
@@ -766,7 +877,6 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect
-	singleConnectOK := c.acceptSingleConnect(respHeader)
 	if !singleConnectOK {
 		c.closeConnection()
 	}
@@ -775,6 +885,8 @@ func (c *Client) Authorize(ctx context.Context, username string, args []string) 
 }
 
 // Accounting sends an accounting record to the TACACS+ server.
+// An ERROR status returns the reply together with ErrAccountingFailed.
+// Network timeouts wrap ErrTimeout.
 func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string, args []string) (*AcctReply, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -828,7 +940,7 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 	respHeader, respBody, err := c.recvPacket(ctx)
 	if err != nil {
 		c.closeConnection()
-		return nil, err
+		return nil, mapRecvError(err, ErrAccountingFailed)
 	}
 
 	// Validate response
@@ -853,11 +965,20 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 		return nil, fmt.Errorf("failed to unmarshal REPLY: %w", err)
 	}
 
+	// RFC 8907: Check if server agreed to single-connect mode
+	singleConnectOK := c.acceptSingleConnect(respHeader)
+
 	// Update session state
 	switch reply.Status {
 	case AcctStatusSuccess:
 		session.SetState(SessionStateComplete)
-	case AcctStatusError, AcctStatusFollow:
+	case AcctStatusError:
+		session.SetState(SessionStateError)
+		if !singleConnectOK {
+			c.closeConnection()
+		}
+		return reply, ErrAccountingFailed
+	case AcctStatusFollow:
 		session.SetState(SessionStateError)
 	default:
 		session.SetState(SessionStateError)
@@ -866,7 +987,6 @@ func (c *Client) Accounting(ctx context.Context, flags AcctFlag, username string
 	}
 
 	// RFC 8907: Close connection if server didn't agree to single-connect
-	singleConnectOK := c.acceptSingleConnect(respHeader)
 	if !singleConnectOK {
 		c.closeConnection()
 	}

@@ -3,6 +3,7 @@ package gotacacs
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -119,8 +120,8 @@ func TestIntegrationPAPAuthentication(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "wrongpassword")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		if !reply.IsFail() {
 			t.Errorf("expected true")
@@ -146,8 +147,8 @@ func TestIntegrationPAPAuthentication(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		reply, err := client.Authenticate(context.Background(), "unknownuser", "anypassword")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthenticationFailed) {
+			t.Fatalf("got %v, want ErrAuthenticationFailed", err)
 		}
 		if !reply.IsFail() {
 			t.Errorf("expected true")
@@ -263,8 +264,8 @@ func TestIntegrationAuthorization(t *testing.T) {
 		client := NewClient(WithAddress(ln.Addr().String()), WithSecret("sharedsecret"))
 
 		resp, err := client.Authorize(context.Background(), "unknown", []string{"service=shell"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if !errors.Is(err, ErrAuthorizationDenied) {
+			t.Fatalf("got %v, want ErrAuthorizationDenied", err)
 		}
 		if !resp.IsFail() {
 			t.Errorf("expected true")
@@ -510,9 +511,11 @@ func TestIntegrationUnencryptedMode(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Server without secret (unencrypted mode)
+		// Server without secret (unencrypted mode) must opt in to insecure
+		// operation per RFC 8907 Section 10.5.2.
 		server := NewServer(
 			WithServerListener(ln),
+			WithServerAllowInsecure(true),
 			WithHandler(newTestIntegrationHandler()),
 		)
 

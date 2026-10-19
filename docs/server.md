@@ -43,6 +43,11 @@ if err := server.Serve(); err != nil {
 | `WithServerReadTimeout(duration)` | Packet read and TLS handshake timeout; zero disables this timeout | 30 seconds |
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
 | `WithServerMaxBodyLength(length uint32)` | Maximum allowed request body length | 256 KiB |
+| `WithServerMaxSessionsPerConn(count int)` | Maximum concurrent sessions per connection; the connection is terminated with `ErrTooManySessions` when exceeded | 64 |
+| `WithServerMaxAuthenRetries(count int)` | Maximum interactive re-prompts (GETUSER/GETPASS/GETDATA) per authentication session before the server sends FAIL (RFC 8907 Section 5.4.2.1). `0` disables the cap | 3 |
+| `WithServerAllowInsecure(allow bool)` | Permit non-TLS connections with no shared secret (cleartext AAA). RFC 8907 forbids this, so it is rejected with `ErrNoSecret` by default | false |
+| `WithServerSingleConnect(allow bool)` | Accept a client's single-connection request (RFC 8907 Section 4.3). When false the server refuses it and closes after each session | true |
+| `WithServerAllowedAuthenTypes(types...)` | Restrict authentication START packets to the listed `authen_type` values (RFC 8907 Section 10.5.3). A disallowed type is refused with FAIL. Empty allows all | all |
 | `WithServerHooks(hooks)` | Lifecycle event hooks | None |
 | `WithMiddleware(middlewares...)` | Handler middleware chain | None |
 
@@ -230,6 +235,26 @@ type AcctRequestContext struct {
 | ERROR | `AuthenStatusError` | Server error |
 | FOLLOW | `AuthenStatusFollow` | Client returns the reply with `ErrAuthenFollow` |
 
+### CHAP Authentication
+
+A CHAP login ([RFC 8907 Section 5.4.2.3](https://datatracker.ietf.org/doc/html/rfc8907#section-5.4.2.3)) arrives as a single START whose data field holds the id, challenge, and MD5 response. Verify it with `VerifyCHAP`, which recomputes the response from the shared secret and compares in constant time:
+
+```go
+func (h *myHandler) HandleAuthenStart(_ context.Context, req *gotacacs.AuthenRequest) *gotacacs.AuthenReply {
+    if req.Start.AuthenType == gotacacs.AuthenTypeCHAP {
+        secret := h.secretFor(string(req.Start.User)) // the user's CHAP secret
+        ok, err := gotacacs.VerifyCHAP(secret, req.Start.Data)
+        if err != nil || !ok {
+            return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusFail}
+        }
+        return &gotacacs.AuthenReply{Status: gotacacs.AuthenStatusPass}
+    }
+    // ... other authen types
+}
+```
+
+`ParseCHAPData` and `CHAPResponse` are available for handlers that need the id, challenge, or response separately. MS-CHAP and MS-CHAPv2 are not implemented.
+
 ### Multi-Step Authentication
 
 For ASCII authentication, handlers use GETUSER to collect a missing username, GETPASS to collect a password, and GETDATA for other input. Keep the requested input and credentials in application state scoped to the connection and `SessionID`; different connections can reuse a `SessionID`. Limit username retries; [RFC 8907 Section 5.4.2.1](https://datatracker.ietf.org/doc/html/rfc8907#section-5.4.2.1) recommends three attempts.
@@ -307,7 +332,9 @@ resp := &gotacacs.AuthorResponse{
 }
 ```
 
-`ArgValues` parses `key=value` attributes and sorts keys when producing output. Use `RawArgs` to process optional `key*value` attributes or preserve wire order. A handler must reject authorization when it cannot process a mandatory attribute, as described in [RFC 8907 Section 6.1](https://datatracker.ietf.org/doc/html/rfc8907#section-6.1).
+`ArgValues` parses both mandatory `key=value` and optional `key*value` attributes, splitting each on the first separator, but it is a lossy convenience view: it discards the mandatory/optional separator, wire order, and cross-key interleaving, and `Output` re-emits every pair with `=`. Use it only when those properties do not matter (for example reading a single `priv-lvl`).
+
+For conformant authorization and accounting arguments, use the `Arg` pair type: `ParseArgs(RawArgs)` returns `[]Arg` carrying the `Optional` flag in wire order with duplicates preserved, and `MarshalArgs` renders `[]Arg` back to raw arguments with each separator, order, and duplicate intact. Reading or building `RawArgs` directly with `Args`/`AddArg` is equally lossless. A handler must reject authorization when it cannot process a mandatory (`=`) attribute, as described in [RFC 8907 Section 6.1](https://datatracker.ietf.org/doc/html/rfc8907#section-6.1).
 
 ## Accounting Status Codes
 
@@ -338,7 +365,7 @@ func (h *myHandler) HandleAcctRequest(_ context.Context, req *gotacacs.AcctReque
 }
 ```
 
-Check WATCHDOG before START because an update with arguments sets both flags. For WATCHDOG without START, ignore all arguments. Return `AcctStatusError` for invalid combinations, including START with STOP or WATCHDOG with STOP ([RFC 8907 Section 7.2](https://datatracker.ietf.org/doc/html/rfc8907#section-7.2)).
+Check WATCHDOG before START because an update with arguments sets both flags. For WATCHDOG without START, ignore all arguments. The server rejects INVALID flag combinations (START with STOP, WATCHDOG with STOP, or no flag set) with `AcctStatusError` before the handler runs, per [RFC 8907 Section 7.2](https://datatracker.ietf.org/doc/html/rfc8907#section-7.2); `AcctRequest.HasValidFlags` exposes the same check.
 
 ## Per-Client Secret Provider
 
@@ -441,6 +468,8 @@ secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotaca
 
 When `Attempts` is 0 or 1, the server uses the single-secret fast path with no behavioral change from previous versions.
 
+When no candidate validates the packet (or, on the single-secret path, the deobfuscated body fails to parse), the server fires `OnBadSecret` and terminates the connection without replying. [RFC 8907 Section 10.5.2](https://www.rfc-editor.org/rfc/rfc8907.html#section-10.5.2) forbids accepting new sessions on a connection after an invalid shared secret is detected, and an error reply obfuscated with the real secret would hand the peer a known-plaintext keystream sample.
+
 ### TLS Client Certificate Access
 
 On TLS connections, `SecretRequest.TLSState` provides access to the client certificate. This example passes the CN to handlers as logging metadata; identity verification belongs in the TLS configuration and uses the configured certificate identities, including SAN DNS names or IP addresses:
@@ -461,6 +490,25 @@ secretProvider := gotacacs.SecretProviderFunc(func(_ context.Context, req gotaca
 ```
 
 `TLSState` is nil for non-TLS connections.
+
+## Shared Secret Requirement
+
+[RFC 8907 Section 10.5.2](https://www.rfc-editor.org/rfc/rfc8907.html#section-10.5.2) requires a shared secret on every non-TLS connection. A non-TLS connection whose resolved secret is empty is rejected with `ErrNoSecret` before any packet is processed. Configure a secret (`WithServerSecret`, `WithServerSecretBytes`, or `WithSecretProvider`), use TLS, or opt into cleartext with `WithServerAllowInsecure(true)` for testing or trusted transports.
+
+On a TLS connection (RFC 9887), a packet received without the unencrypted flag is answered with a `STATUS_ERROR` reply carrying the flag set, and then the connection terminates.
+
+A packet whose type is not authentication, authorization, or accounting cannot be dispatched. Per [RFC 8907 Section 3.6](https://www.rfc-editor.org/rfc/rfc8907.html#section-3.6), the server replies with the identical cleartext header, the sequence number incremented by one, and the length set to zero, then terminates the connection.
+
+## Text and Username Validation
+
+[RFC 8907 Section 3.7](https://www.rfc-editor.org/rfc/rfc8907.html#section-3.7) requires usernames to follow the RFC 8265 UsernameCasePreserved profile and all other text fields to be printable US-ASCII with no control characters. The server rejects a request whose username fails validation with an error response before invoking the handler. Two exported helpers expose the same checks for application use:
+
+- `ValidateUsername([]byte) error` enforces the RFC 8265 profile for the ASCII range (printable, non-space, non-empty). Full PRECIS handling of non-ASCII code points requires Unicode tables this zero-dependency library does not carry, so a non-ASCII username is rejected rather than passed through unvalidated; an application that must accept non-ASCII usernames should apply a PRECIS implementation before calling the library.
+- `ValidateText([]byte) error` enforces printable US-ASCII (space allowed, control characters and non-ASCII bytes rejected) for other text fields.
+
+## Authentication Retry Limit
+
+[RFC 8907 Section 5.4.2.1](https://www.rfc-editor.org/rfc/rfc8907.html#section-5.4.2.1) requires the server to limit interactive authentication retries. The server counts GETUSER/GETPASS/GETDATA re-prompts per session and, once a session exceeds `WithServerMaxAuthenRetries` (default 3), replaces the handler's prompt with a FAIL and ends the session, so a handler that loops on GET* cannot keep a session open to the sequence-number ceiling. Set the limit to `0` to disable the cap.
 
 ## TLS Configuration (RFC 9887)
 

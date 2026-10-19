@@ -25,16 +25,20 @@ var (
 	// ErrConnectionClosed indicates the connection was terminated.
 	ErrConnectionClosed = errors.New("connection closed")
 
-	// ErrTimeout indicates an operation timed out.
+	// ErrTimeout indicates a network operation timed out.
+	// Client operations wrap it around the underlying net error.
 	ErrTimeout = errors.New("operation timeout")
 
-	// ErrAuthenticationFailed indicates authentication failed.
+	// ErrAuthenticationFailed indicates the server returned a FAIL
+	// authentication status. The reply is returned alongside this error.
 	ErrAuthenticationFailed = errors.New("authentication failed")
 
-	// ErrAuthorizationDenied indicates authorization was denied.
+	// ErrAuthorizationDenied indicates the server returned a FAIL
+	// authorization status. The response is returned alongside this error.
 	ErrAuthorizationDenied = errors.New("authorization denied")
 
-	// ErrAccountingFailed indicates accounting operation failed.
+	// ErrAccountingFailed indicates the server returned an ERROR
+	// accounting status. The reply is returned alongside this error.
 	ErrAccountingFailed = errors.New("accounting failed")
 
 	// ErrBufferTooShort indicates the buffer is too short for the operation.
@@ -64,4 +68,23 @@ var (
 	// suggests the body was deobfuscated with the wrong secret,
 	// resulting in garbage length fields.
 	ErrBadSecret = errors.New("bad secret")
+
+	// ErrTooManySessions indicates a connection exceeded the maximum
+	// number of concurrent sessions and was terminated.
+	ErrTooManySessions = errors.New("too many sessions")
+
+	// ErrNoSecret indicates a non-TLS connection had no shared secret
+	// configured. RFC 8907 Section 10.5.2 requires a shared secret on every
+	// non-TLS connection; the server rejects such connections unless
+	// WithServerAllowInsecure is set.
+	ErrNoSecret = errors.New("no shared secret for non-TLS connection")
+
+	// ErrInvalidUsername indicates a username is not valid per the RFC 8907
+	// Section 3.7 / RFC 8265 UsernameCasePreserved rules enforced by
+	// ValidateUsername.
+	ErrInvalidUsername = errors.New("invalid username")
+
+	// ErrInvalidText indicates a text field contains non-printable or
+	// non-US-ASCII bytes, violating RFC 8907 Section 3.7.
+	ErrInvalidText = errors.New("invalid text field")
 )
