@@ -6798,3 +6798,30 @@ func TestNewComposedHandler(t *testing.T) {
 		t.Error("nil acct handler must return an error response")
 	}
 }
+
+// TestCleanupSessionDropsAuthenPrompts guards against a connection-local memory
+// leak: an interactive GET* reply records an authenPrompts entry, and the
+// session cleanup path (e.g. after an ABORT continuation returns a nil response
+// in single-connect mode) must remove that entry so a peer cannot grow the
+// prompt map with unique session IDs without ever tripping maxSessionsPerConn.
+func TestCleanupSessionDropsAuthenPrompts(t *testing.T) {
+	s := NewServer(WithServerMaxAuthenRetries(3))
+	const sessionID uint32 = 7
+
+	getPass, _ := (&AuthenReply{Status: AuthenStatusGetPass}).MarshalBinary()
+	authenPrompts := make(map[uint32]int)
+	if _, _ = s.enforceAuthenRetryLimit(sessionID, getPass, SessionStateActive, authenPrompts); authenPrompts[sessionID] != 1 {
+		t.Fatalf("expected a prompt counter of 1, got %d", authenPrompts[sessionID])
+	}
+
+	localSessions := map[uint32]*Session{sessionID: NewSessionWithID(sessionID, false)}
+	trackingIDs := make(map[uint32]uint64)
+	s.cleanupSession(sessionID, localSessions, trackingIDs, authenPrompts)
+
+	if _, ok := authenPrompts[sessionID]; ok {
+		t.Error("cleanupSession left an orphaned authenPrompts entry")
+	}
+	if len(authenPrompts) != 0 {
+		t.Errorf("authenPrompts not emptied: %d entries remain", len(authenPrompts))
+	}
+}

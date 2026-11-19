@@ -832,9 +832,13 @@ func (s *Server) isSessionKicked(trackingID uint64) bool {
 	return ts.(*trackedSession).kicked.Load()
 }
 
-// cleanupSession removes a session from local and active session maps.
-func (s *Server) cleanupSession(sessionID uint32, localSessions map[uint32]*Session, trackingIDs map[uint32]uint64) {
+// cleanupSession removes a session from local and active session maps, and
+// drops its interactive re-prompt counter so the authenPrompts map cannot
+// outlive the session (e.g. after an ABORT continuation that returns a nil
+// response in single-connect mode).
+func (s *Server) cleanupSession(sessionID uint32, localSessions map[uint32]*Session, trackingIDs map[uint32]uint64, authenPrompts map[uint32]int) {
 	delete(localSessions, sessionID)
+	delete(authenPrompts, sessionID)
 	if trackingID, ok := trackingIDs[sessionID]; ok {
 		if s.hooks.OnSessionEnd != nil {
 			if ts, loaded := s.activeSessions.Load(trackingID); loaded {
@@ -858,7 +862,7 @@ func (s *Server) updateTrackedState(trackingIDs map[uint32]uint64, sessionID uin
 }
 
 // cleanupConnection marks remaining active sessions as errored and cleans them up.
-func (s *Server) cleanupConnection(localSessions map[uint32]*Session, trackingIDs map[uint32]uint64, cs *connState) {
+func (s *Server) cleanupConnection(localSessions map[uint32]*Session, trackingIDs map[uint32]uint64, authenPrompts map[uint32]int, cs *connState) {
 	for _, trackingID := range trackingIDs {
 		if ts, loaded := s.activeSessions.Load(trackingID); loaded {
 			ts.(*trackedSession).state.CompareAndSwap(
@@ -870,7 +874,7 @@ func (s *Server) cleanupConnection(localSessions map[uint32]*Session, trackingID
 		}
 	}
 	for sessionID := range localSessions {
-		s.cleanupSession(sessionID, localSessions, trackingIDs)
+		s.cleanupSession(sessionID, localSessions, trackingIDs, authenPrompts)
 	}
 	s.fireDisconnect(cs.remoteAddr, cs.localAddr)
 }
@@ -1060,7 +1064,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 	// RFC 8907 Section 5.4.2.1 retry limit.
 	authenPrompts := make(map[uint32]int)
 	defer func() {
-		s.cleanupConnection(localSessions, trackingIDs, cs)
+		s.cleanupConnection(localSessions, trackingIDs, authenPrompts, cs)
 	}()
 
 	for {
@@ -1109,7 +1113,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 			kickedHeader := *header
 			kickedHeader.Flags = singleConnectFlag
 			s.sendKickedResponse(conn, &kickedHeader, cs.secret, cs.isTLS)
-			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs, authenPrompts)
 			if singleConnectFlag == 0 {
 				return nil
 			}
@@ -1149,7 +1153,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 		session.SetState(sessionState)
 		s.updateTrackedState(trackingIDs, header.SessionID, sessionState)
 		if respBody == nil {
-			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs, authenPrompts)
 			if singleConnectFlag == 0 {
 				return nil
 			}
@@ -1161,7 +1165,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 		if err != nil {
 			session.SetState(SessionStateError)
 			s.updateTrackedState(trackingIDs, header.SessionID, SessionStateError)
-			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs, authenPrompts)
 			return err
 		}
 
@@ -1189,7 +1193,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, shutdownCh <-chan
 
 		// Clean up completed sessions to prevent unbounded growth in single-connect mode
 		if session.State() == SessionStateComplete || session.State() == SessionStateError {
-			s.cleanupSession(header.SessionID, localSessions, trackingIDs)
+			s.cleanupSession(header.SessionID, localSessions, trackingIDs, authenPrompts)
 
 			// Close connection if not single-connect mode
 			if singleConnectFlag == 0 {
