@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0](https://github.com/vitalvas/gotacacs/compare/v0.7.0...v1.0.0) (2026-11-19)
+
+
+### Features
+
+* bound concurrent connections with WithServerMaxConns ([df5210d](https://github.com/vitalvas/gotacacs/commit/df5210d6f2b923f81c73b46c0ebbc2082a9da322))
+* refuse insecure client connections without opt-in ([25f71bb](https://github.com/vitalvas/gotacacs/commit/25f71bb80781d5fd9f2692ecd70a116e224f865a))
+
+
+### Bug Fixes
+
+* drop authenPrompts entry on session cleanup ([ca86287](https://github.com/vitalvas/gotacacs/commit/ca86287e3db79b84c99b49082cc2aeb8f25fde2a))
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([5cbb381](https://github.com/vitalvas/gotacacs/commit/5cbb3810eca497c5ea8301352ab51b912b5cc7da))
+
 ## [0.7.0](https://github.com/vitalvas/gotacacs/compare/v0.6.1...v0.7.0) (2026-10-19)
 
 
