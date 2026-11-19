@@ -561,6 +561,63 @@ func TestServerAcceptErrorClosesActiveConnections(t *testing.T) {
 	}
 }
 
+func TestServerMaxConnsShedsExcess(t *testing.T) {
+	ln, err := ListenTCP("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	server := NewServer(
+		WithServerListener(ln),
+		WithServerAllowInsecure(true),
+		WithServerReadTimeout(10*time.Second),
+		WithServerMaxConns(1),
+	)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve() }()
+	defer func() {
+		_ = server.Shutdown(context.Background())
+		<-serveDone
+	}()
+
+	// The first connection occupies the only slot. It idles inside the read
+	// loop (read timeout is long), so the slot stays held for the test.
+	first, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer first.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for server.activeConnCount.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("first connection was not admitted")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The second connection exceeds the limit, so the server closes it without
+	// servicing it. A read returns promptly with EOF instead of blocking.
+	second, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer second.Close()
+	if err := second.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := second.Read(make([]byte, 1)); err == nil {
+		t.Fatal("over-limit connection was serviced instead of being shed")
+	} else if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+		t.Fatalf("over-limit connection was not closed: %v", err)
+	}
+
+	// Shedding must not count the closed connection against the limit, and the
+	// first connection must still be served.
+	if got := server.activeConnCount.Load(); got != 1 {
+		t.Errorf("shed connection leaked a slot: active count = %d, want 1", got)
+	}
+}
+
 func TestServerRestart(t *testing.T) {
 	t.Run("server can be restarted after shutdown", func(t *testing.T) {
 		ln1, err := ListenTCP("127.0.0.1:0")

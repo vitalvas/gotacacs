@@ -390,6 +390,7 @@ type Server struct {
 	maxBodyLength      uint32
 	maxSessionsPerConn int
 	maxAuthenRetries   int
+	maxConns           int
 	allowInsecure      bool
 	allowSingleConnect bool
 	allowedAuthenTypes map[AuthenType]struct{}
@@ -406,10 +407,11 @@ type Server struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	wg             sync.WaitGroup
-	activeConns    sync.Map // map of net.Conn for forcible close on shutdown
-	activeSessions sync.Map
-	nextTrackingID atomic.Uint64
-	nextConnID     atomic.Uint64
+	activeConns     sync.Map // map of net.Conn for forcible close on shutdown
+	activeConnCount atomic.Int64
+	activeSessions  sync.Map
+	nextTrackingID  atomic.Uint64
+	nextConnID      atomic.Uint64
 }
 
 // NewServer creates a new TACACS+ server with the given options.
@@ -420,6 +422,7 @@ func NewServer(opts ...ServerOption) *Server {
 		maxBodyLength:      DefaultMaxBodyLength,
 		maxSessionsPerConn: DefaultMaxSessionsPerConn,
 		maxAuthenRetries:   DefaultMaxAuthenRetries,
+		maxConns:           DefaultMaxConns,
 		allowSingleConnect: true,
 	}
 
@@ -463,6 +466,20 @@ func WithServerMaxSessionsPerConn(maxSessions int) ServerOption {
 func WithServerMaxAuthenRetries(maxRetries int) ServerOption {
 	return func(s *Server) {
 		s.maxAuthenRetries = maxRetries
+	}
+}
+
+// WithServerMaxConns bounds the number of connections Serve handles
+// concurrently. When the limit is reached, a newly accepted connection is
+// closed immediately instead of being serviced, so a connection flood cannot
+// exhaust sockets, goroutines, or SecretProvider calls before authentication.
+// Serve keeps accepting so the listener drains and legitimate clients are
+// served as slots free up. A value <= 0 disables the limit; the default is
+// DefaultMaxConns. This applies only to the listener-driven Serve path;
+// ServeConn callers manage their own admission.
+func WithServerMaxConns(maxConns int) ServerOption {
+	return func(s *Server) {
+		s.maxConns = maxConns
 	}
 }
 
@@ -571,6 +588,17 @@ func (s *Server) Serve() error {
 			_ = conn.Close()
 			return nil
 		}
+		// Shed load past the aggregate connection limit: close the excess
+		// connection before any TLS handshake or SecretProvider call, and keep
+		// accepting so the listener drains and slots are reused as handlers
+		// finish. Reserve the slot under the lock so concurrent Accepts cannot
+		// both pass the check and overshoot the limit.
+		if s.maxConns > 0 && s.activeConnCount.Load() >= int64(s.maxConns) {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.activeConnCount.Add(1)
 		s.wg.Add(1)
 		connShutdownCtx, connShutdownCh := s.shutdownCtx, s.shutdownCh
 		s.mu.Unlock()
@@ -1000,6 +1028,7 @@ func (s *Server) sendTLSFlagError(conn net.Conn, header *Header, cs *connState) 
 // intentionally discarded because Serve has no caller to return it to.
 func (s *Server) handleConnection(shutdownCtx context.Context, conn net.Conn, shutdownCh <-chan struct{}) {
 	defer s.wg.Done()
+	defer s.activeConnCount.Add(-1)
 	_ = s.serveConn(shutdownCtx, conn, shutdownCh)
 }
 

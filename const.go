@@ -284,3 +284,11 @@ const DefaultMaxSessionsPerConn = 64
 // re-prompts (GETUSER/GETPASS/GETDATA) the server issues in one authentication
 // session, per the three-attempt recommendation of RFC 8907 Section 5.4.2.1.
 const DefaultMaxAuthenRetries = 3
+
+// DefaultMaxConns is the default aggregate limit on connections handled
+// concurrently by Serve. It bounds the sockets, goroutines, TLS handshakes,
+// and SecretProvider calls a connection flood can consume before any
+// authentication. Serve sheds connections accepted beyond this limit. A
+// deployment that legitimately needs more concurrent connections must raise it
+// with WithServerMaxConns; a value <= 0 disables the limit.
+const DefaultMaxConns = 1024
