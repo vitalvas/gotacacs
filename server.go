@@ -399,14 +399,14 @@ type Server struct {
 	acctHandler        AccountingHandler
 	handler            Handler
 
-	running        bool
-	serving        bool
-	shuttingDown   bool
-	shutdownCh     chan struct{}
-	shutdownDone   chan struct{}
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
-	wg             sync.WaitGroup
+	running         bool
+	serving         bool
+	shuttingDown    bool
+	shutdownCh      chan struct{}
+	shutdownDone    chan struct{}
+	shutdownCtx     context.Context
+	shutdownCancel  context.CancelFunc
+	wg              sync.WaitGroup
 	activeConns     sync.Map // map of net.Conn for forcible close on shutdown
 	activeConnCount atomic.Int64
 	activeSessions  sync.Map

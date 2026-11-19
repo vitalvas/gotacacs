@@ -5652,6 +5652,9 @@ func newServeConnPair(t *testing.T, server *Server, secret string) (*Client, fun
 	}
 	if secret != "" {
 		opts = append(opts, WithSecret(secret))
+	} else {
+		// A secretless pipe is plaintext; opt in so Connect does not refuse it.
+		opts = append(opts, WithClientAllowInsecure(true))
 	}
 	client := NewClient(opts...)
 

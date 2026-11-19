@@ -48,6 +48,7 @@ type Client struct {
 	singleConnectAccepted   bool
 	maxBodyLength           uint32
 	tlsMode                 bool // RFC 9887: when true, use unencrypted flag and skip obfuscation
+	allowInsecure           bool // opt-in to plaintext with no secret; off by default
 }
 
 // ClientOption is a function that configures a Client.
@@ -114,6 +115,17 @@ func WithTLSConfig(config *tls.Config) ClientOption {
 			Config:  cfg,
 		}
 		c.tlsMode = true
+	}
+}
+
+// WithClientAllowInsecure permits connecting over plain TCP with no shared
+// secret, which sends AAA data (including PAP usernames and passwords) in
+// cleartext. RFC 8907 Section 10.5.2 forbids this, so the client refuses such a
+// connection by default; enable it only for testing or trusted-transport
+// deployments.
+func WithClientAllowInsecure(allow bool) ClientOption {
+	return func(c *Client) {
+		c.allowInsecure = allow
 	}
 }
 
@@ -190,6 +202,16 @@ func (c *Client) connectLocked(ctx context.Context) error {
 	if c.tlsMode && !IsTLSConn(conn) {
 		_ = conn.Close()
 		return fmt.Errorf("%w: TLS mode requires a TLS connection", ErrInvalidPacket)
+	}
+
+	// RFC 8907 Section 10.5.2: a non-TLS connection MUST have a shared secret.
+	// Without one the body is sent unobfuscated, exposing PAP credentials to any
+	// on-path observer. Refuse before anything reaches the wire unless the caller
+	// explicitly opted in. Check the actual connection, not just tlsMode, so a
+	// non-TLS dialer cannot bypass this.
+	if !IsTLSConn(conn) && len(c.secret) == 0 && !c.allowInsecure {
+		_ = conn.Close()
+		return fmt.Errorf("%w: refusing plaintext connection to %s", ErrNoSecret, c.address)
 	}
 
 	c.conn = conn

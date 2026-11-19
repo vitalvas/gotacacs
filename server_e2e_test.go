@@ -523,8 +523,9 @@ func TestIntegrationUnencryptedMode(t *testing.T) {
 		defer server.Shutdown(context.Background())
 		time.Sleep(50 * time.Millisecond)
 
-		// Client without secret
-		client := NewClient(WithAddress(ln.Addr().String()))
+		// Client without secret must opt in to insecure operation, mirroring
+		// the server's WithServerAllowInsecure above.
+		client := NewClient(WithAddress(ln.Addr().String()), WithClientAllowInsecure(true))
 
 		reply, err := client.Authenticate(context.Background(), "admin", "admin123")
 		if err != nil {

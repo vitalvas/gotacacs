@@ -193,7 +193,7 @@ func TestClientConnect(t *testing.T) {
 			}
 		}()
 
-		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(5*time.Second))
+		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(5*time.Second), WithClientAllowInsecure(true))
 		err = client.Connect(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -234,6 +234,74 @@ func TestClientConnect(t *testing.T) {
 	})
 }
 
+// TestClientRefusesInsecureByDefault guards RFC 8907 Section 10.5.2 on the
+// client: a plain-TCP connection with no shared secret would send PAP
+// credentials in cleartext, so Connect must refuse it unless the caller opts in
+// with WithClientAllowInsecure. The refusal fires before anything reaches the
+// wire; a configured secret or the opt-in both permit the connection.
+func TestClientRefusesInsecureByDefault(t *testing.T) {
+	newListener := func(t *testing.T) net.Listener {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				time.Sleep(50 * time.Millisecond)
+				_ = conn.Close()
+			}
+		}()
+		return ln
+	}
+
+	t.Run("refused without secret or opt-in", func(t *testing.T) {
+		ln := newListener(t)
+		defer ln.Close()
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(time.Second))
+		err := client.Connect(context.Background())
+		if !errors.Is(err, ErrNoSecret) {
+			t.Fatalf("Connect error = %v, want ErrNoSecret", err)
+		}
+		if client.IsConnected() {
+			t.Error("plaintext connection was retained after refusal")
+		}
+	})
+
+	t.Run("allowed with opt-in", func(t *testing.T) {
+		ln := newListener(t)
+		defer ln.Close()
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(time.Second), WithClientAllowInsecure(true))
+		defer client.Close()
+		if err := client.Connect(context.Background()); err != nil {
+			t.Fatalf("opt-in insecure connect failed: %v", err)
+		}
+		if !client.IsConnected() {
+			t.Error("expected a connection with WithClientAllowInsecure")
+		}
+	})
+
+	t.Run("allowed with secret", func(t *testing.T) {
+		ln := newListener(t)
+		defer ln.Close()
+
+		client := NewClient(WithAddress(ln.Addr().String()), WithTimeout(time.Second), WithSecret("s3cr3t"))
+		defer client.Close()
+		if err := client.Connect(context.Background()); err != nil {
+			t.Fatalf("connect with secret failed: %v", err)
+		}
+		if !client.IsConnected() {
+			t.Error("expected a connection when a secret is configured")
+		}
+	})
+}
+
 func TestClientAddresses(t *testing.T) {
 	t.Run("local and remote addr when not connected", func(t *testing.T) {
 		client := NewClient(WithAddress("localhost:49"))
@@ -260,7 +328,7 @@ func TestClientAddresses(t *testing.T) {
 			}
 		}()
 
-		client := NewClient(WithAddress(ln.Addr().String()))
+		client := NewClient(WithAddress(ln.Addr().String()), WithClientAllowInsecure(true))
 		err = client.Connect(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -2791,7 +2859,7 @@ func TestClientCancelWithoutDeadline(t *testing.T) {
 			peer, conn := net.Pipe()
 			defer peer.Close()
 			defer conn.Close()
-			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithTimeout(0))
+			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithTimeout(0), WithClientAllowInsecure(true))
 			defer client.Close()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -2881,7 +2949,7 @@ func TestClientASCIISingleConnectNegotiation(t *testing.T) {
 	for _, accepted := range []bool{false, true} {
 		t.Run(fmt.Sprint("accepted=", accepted), func(t *testing.T) {
 			peer, conn := net.Pipe()
-			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithSingleConnect(true))
+			client := NewClient(WithDialer(&pipeDialer{conn: conn}), WithSingleConnect(true), WithClientAllowInsecure(true))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)

@@ -24,10 +24,11 @@ client := gotacacs.NewClient(
 | Option | Description | Default |
 |--------|-------------|---------|
 | `WithAddress(addr string)` | Server address in `host:port` format | Required |
-| `WithSecret(secret string)` | Shared secret for packet obfuscation | None (unencrypted) |
+| `WithSecret(secret string)` | Shared secret for packet obfuscation | None |
 | `WithSecretBytes(secret []byte)` | Shared secret as byte slice | None |
 | `WithTimeout(duration time.Duration)` | Built-in dialer timeout and timeout for each network read/write; zero disables this timeout | 30 seconds |
 | `WithTLSConfig(config *tls.Config)` | TLS configuration with a minimum version of TLS 1.3 | None (plain TCP) |
+| `WithClientAllowInsecure(allow bool)` | Permit connecting over plain TCP with no shared secret (cleartext AAA, including PAP credentials). RFC 8907 forbids this, so it is rejected with `ErrNoSecret` by default | false |
 | `WithDialer(dialer Dialer)` | Custom dialer implementation | TCPDialer |
 | `WithSingleConnect(enabled bool)` | Enable connection reuse | false |
 | `WithMaxBodyLength(length uint32)` | Maximum allowed response body length | 256 KiB |
@@ -259,6 +260,10 @@ Keep accounting attributes before service/authorization attributes. Shell record
 |--------|-------------|
 | `IsSuccess()` | Returns true if accounting record accepted |
 | `IsError()` | Returns true if server returned an error |
+
+## Shared Secret Requirement
+
+[RFC 8907 Section 10.5.2](https://www.rfc-editor.org/rfc/rfc8907.html#section-10.5.2) requires a shared secret on every non-TLS connection. Without one the packet body is sent unobfuscated, exposing AAA data — including PAP usernames and passwords — to any on-path observer. A non-TLS client with an empty secret is refused with `ErrNoSecret` during `Connect`, before any packet reaches the wire. Configure a secret (`WithSecret` or `WithSecretBytes`), use TLS (`WithTLSConfig`), or opt into cleartext with `WithClientAllowInsecure(true)` for testing or trusted transports.
 
 ## TLS Configuration (RFC 9887)
 

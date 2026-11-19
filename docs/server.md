@@ -44,6 +44,7 @@ if err := server.Serve(); err != nil {
 | `WithServerWriteTimeout(duration)` | Write timeout | 30 seconds |
 | `WithServerMaxBodyLength(length uint32)` | Maximum allowed request body length | 256 KiB |
 | `WithServerMaxSessionsPerConn(count int)` | Maximum concurrent sessions per connection; the connection is terminated with `ErrTooManySessions` when exceeded | 64 |
+| `WithServerMaxConns(count int)` | Maximum connections `Serve` handles concurrently; connections accepted beyond the limit are closed immediately before any TLS handshake or secret lookup, so a connection flood cannot exhaust resources. `0` disables the limit. Applies only to `Serve`, not `ServeConn` | 1024 |
 | `WithServerMaxAuthenRetries(count int)` | Maximum interactive re-prompts (GETUSER/GETPASS/GETDATA) per authentication session before the server sends FAIL (RFC 8907 Section 5.4.2.1). `0` disables the cap | 3 |
 | `WithServerAllowInsecure(allow bool)` | Permit non-TLS connections with no shared secret (cleartext AAA). RFC 8907 forbids this, so it is rejected with `ErrNoSecret` by default | false |
 | `WithServerSingleConnect(allow bool)` | Accept a client's single-connection request (RFC 8907 Section 4.3). When false the server refuses it and closes after each session | true |
